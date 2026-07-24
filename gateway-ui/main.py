@@ -328,7 +328,7 @@ async def send_ntfy(title: str, message: str, priority: str = "default", tags: l
             r.raise_for_status()
         return True
     except Exception as exc:
-        logging.error("NTFY send failed: %s", exc)
+        logging.error("NTFY send failed: %s: %r", type(exc).__name__, exc)
         return False
 
 
@@ -1264,7 +1264,7 @@ async def api_system_version(_: Auth):
                 logging.warning("GitHub API returned %d (api_system_version)", r.status_code)
                 result["check_failed"] = True
     except Exception as exc:
-        logging.warning("GitHub API check failed (api_system_version): %s", exc)
+        logging.warning("GitHub API check failed (api_system_version): %s: %r", type(exc).__name__, exc)
         result["check_failed"] = True
 
     return result
@@ -1642,7 +1642,7 @@ async def _ntfy_notifier():
                     else:
                         logging.warning("GitHub API returned %d (ntfy_notifier)", r.status_code)
             except Exception as exc:
-                logging.warning("GitHub API check failed (ntfy_notifier): %s", exc)
+                logging.warning("GitHub API check failed (ntfy_notifier): %s: %r", type(exc).__name__, exc)
 
             # ── First run: set baseline, no alerts ────────────────────────
             if _ntfy_first_run:
