@@ -1662,7 +1662,7 @@ async def _ntfy_notifier():
                 if wgs != "optional":
                     _ntfy_state["wingbits_fault"] = (wgs == "fault")
 
-                ts_mismatch, _, _ = _check_tailscale_hostname_mismatch()
+                ts_mismatch, _, _, _ = _check_tailscale_hostname_mismatch()
                 _ntfy_state["tailscale_hostname_mismatch"] = ts_mismatch
 
                 _ntfy_first_run = False
@@ -1725,15 +1725,25 @@ async def _ntfy_notifier():
 
             # ── Check: tailscale_hostname_mismatch ─────────────────────────
             if "tailscale_hostname_mismatch" in enabled_alerts:
-                ts_mismatch, sys_hostname, ts_hostname = _check_tailscale_hostname_mismatch()
+                ts_mismatch, sys_hostname, ts_hostname, ts_mismatch_type = _check_tailscale_hostname_mismatch()
                 if ts_mismatch != _ntfy_state["tailscale_hostname_mismatch"]:
                     if ts_mismatch:
+                        if ts_mismatch_type == "suffix":
+                            detail = (
+                                f"System hostname: {sys_hostname}\n"
+                                f"Tailscale hostname: {ts_hostname}\n"
+                                f"Device was likely re-flashed — Tailscale auto-renamed it.\n"
+                                f"Remove stale duplicate entries: https://login.tailscale.com/admin/machines"
+                            )
+                        else:
+                            detail = (
+                                f"System hostname: {sys_hostname}\n"
+                                f"Tailscale hostname: {ts_hostname}\n"
+                                f"Hostnames do not match — check Tailscale configuration."
+                            )
                         await send_ntfy(
                             "Tailscale Hostname Mismatch",
-                            f"System hostname: {sys_hostname}\n"
-                            f"Tailscale hostname: {ts_hostname}\n"
-                            f"Device was likely re-flashed — Tailscale auto-renamed it.\n"
-                            f"Remove stale duplicate entries: https://login.tailscale.com/admin/machines",
+                            detail,
                             "high",
                             ["warning", "tailscale"],
                         )
