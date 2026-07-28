@@ -8,6 +8,10 @@ level = "info"
 timestamp = true
 
 [poc]
+# HIP-149 (2026-07-03): PoC network-wide retired — disable beaconer entirely.
+# Reconnect WARNs to the decommissioned ingest may still appear; these are
+# harmless and can't be suppressed via config (gateway-rs v1.3.0 limitation).
+disable = true
 entropy_uri = "http://entropy.iot.mainnet.helium.io:7080"
 ingest_uri = "http://mainnet-pociot.helium.io:9080"
 

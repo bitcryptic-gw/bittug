@@ -71,4 +71,35 @@ else
     exit 1
 fi
 
+# --- gateway-rs settings.toml ---
+# Sync updated config to /etc/helium_gateway/ on already-provisioned devices.
+# Idempotent: only copies when content differs (hash compare, not mtime).
+# Restarts gateway-rs.service only if the file actually changed.
+SETTINGS_SRC="/opt/gateway/config/settings.toml"
+SETTINGS_DST="/etc/helium_gateway/settings.toml"
+if [ -f "$SETTINGS_SRC" ]; then
+    src_hash=$(sha256sum "$SETTINGS_SRC" | awk '{print $1}')
+    dst_hash=""
+    if [ -f "$SETTINGS_DST" ]; then
+        dst_hash=$(sha256sum "$SETTINGS_DST" | awk '{print $1}')
+    fi
+    if [ "$src_hash" = "$dst_hash" ]; then
+        log "settings.toml unchanged — skipping"
+    else
+        log "Updating settings.toml (content changed)"
+        mkdir -p /etc/helium_gateway
+        cp "$SETTINGS_SRC" "$SETTINGS_DST"
+        chmod 644 "$SETTINGS_DST"
+        chown root:root "$SETTINGS_DST"
+        if /usr/bin/systemctl list-unit-files gateway-rs.service --no-legend | grep -q .; then
+            log "Restarting gateway-rs.service to pick up updated settings.toml"
+            /usr/bin/systemctl restart gateway-rs.service
+        else
+            log "WARNING: gateway-rs.service not installed — settings.toml synced, restart skipped"
+        fi
+    fi
+else
+    log "WARNING: settings.toml not found at ${SETTINGS_SRC} — skipping"
+fi
+
 log "sync-provisioning complete"
