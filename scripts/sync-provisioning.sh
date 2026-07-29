@@ -62,6 +62,11 @@ gateway-ui ALL=(root) NOPASSWD: /opt/gateway/scripts/apply-band.sh
 gateway-ui ALL=(root) NOPASSWD: /opt/gateway/scripts/apply-timezone.sh
 gateway-ui ALL=(root) NOPASSWD: /opt/gateway/scripts/apply-hostname.sh
 gateway-ui ALL=(root) NOPASSWD: /usr/local/bin/depin-config-wrapper
+gateway-ui ALL=(root) NOPASSWD: /opt/gateway/scripts/depin-uninstall.sh
+gateway-ui ALL=(root) NOPASSWD: /bin/systemctl enable depin-*.service
+gateway-ui ALL=(root) NOPASSWD: /bin/systemctl disable depin-*.service
+gateway-ui ALL=(root) NOPASSWD: /bin/systemctl start depin-*.service
+gateway-ui ALL=(root) NOPASSWD: /bin/systemctl stop depin-*.service
 SUDOERS
 chmod 0440 /etc/sudoers.d/10-gateway-ui
 if visudo -c -f /etc/sudoers.d/10-gateway-ui; then

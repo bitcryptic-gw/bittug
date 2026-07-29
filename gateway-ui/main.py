@@ -62,6 +62,8 @@ WRAPPER_BIN = "/usr/local/bin/wingbits-setup-wrapper"
 
 NTFY_PATH = Path("/etc/gateway-ui/ntfy.json")
 POWER_WRAPPER = "/usr/local/bin/system-power-wrapper"
+DEPIN_WRAPPER = "/usr/local/bin/depin-config-wrapper"
+DEPIN_UNINSTALL = "/opt/gateway/scripts/depin-uninstall.sh"
 NTFY_URL_RE = re.compile(r"^https?://")
 NTFY_TOPIC_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 ALLOWED_ALERT_KEYS = {
@@ -78,6 +80,42 @@ _wingbits_running = False
 TS_KEY_RE = re.compile(r"^tskey(-auth)?-[A-Za-z0-9_-]+")
 CIDR_RE   = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2}$")
 ALLOWED_TAILSCALE_UNITS = ["readsb", "wingbits", "tailscaled", "kernel", "sshd", "pktfwd", "gateway-rs"]
+
+DEPIN_PROJECTS = ["honeygain", "urnetwork", "myst", "anyone"]
+DEPIN_PROJECT_RE = re.compile(r"^(honeygain|urnetwork|myst|anyone)$")
+DEPIN_DEVICE_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-]{0,63}$")
+DEPIN_NICKNAME_RE = re.compile(r"^[a-zA-Z0-9]{1,19}$")
+DEPIN_CONFIG_REQUIRED = {"honeygain", "anyone"}
+DEPIN_ENV_DIR = Path("/etc/gateway-ui/depin")
+DEPIN_ANONRC = Path("/var/lib/gateway-ui/anyone/etc/anonrc")
+
+DEPIN_IMAGES = {
+    "honeygain": "honeygain/honeygain:latest",
+    "urnetwork": "bringyour/community-provider:g4-latest",
+    "myst": "mysteriumnetwork/myst:latest",
+    "anyone": "ghcr.io/anyone-protocol/ator-protocol:latest",
+}
+
+DEPIN_LOG_LINES = 50
+
+DEPIN_HEALTH_PATTERNS = {
+    "honeygain": {
+        "connected": re.compile(r"successfully connected|connected", re.IGNORECASE),
+        "disconnected": re.compile(r"disconnected|connection lost|error", re.IGNORECASE),
+    },
+    "urnetwork": {
+        "active": re.compile(r"pool-stats|providing|connected", re.IGNORECASE),
+        "inactive": re.compile(r"error|fatal|disconnected", re.IGNORECASE),
+    },
+    "myst": {
+        "active": re.compile(r"new session|session established|serving", re.IGNORECASE),
+        "inactive": re.compile(r"error|no sessions|disconnected", re.IGNORECASE),
+    },
+    "anyone": {
+        "healthy": re.compile(r"\[notice\]", re.IGNORECASE),
+        "unhealthy": re.compile(r"\[err\]|\[warn\]", re.IGNORECASE),
+    },
+}
 
 # ── Config + Token (loaded at startup) ───────────────────────────────────────
 
@@ -1900,6 +1938,235 @@ async def api_set_port(_: Auth, request: Request, bg: BackgroundTasks):
     _write_config({"port": str(port)})
     bg.add_task(_restart_after, "gateway-ui")
     return {"ok": True, "port": port}
+
+
+# ── DePIN ─────────────────────────────────────────────────────────────────────
+
+
+def _depin_service_unit(project: str) -> str:
+    return f"depin-{project}.service"
+
+
+def _depin_is_configured(project: str) -> bool:
+    if project not in DEPIN_CONFIG_REQUIRED:
+        return True
+    if project == "honeygain":
+        return (DEPIN_ENV_DIR / "honeygain.env").exists()
+    if project == "anyone":
+        return DEPIN_ANONRC.exists()
+    return False
+
+
+def _depin_validate_project(project: str) -> None:
+    if not DEPIN_PROJECT_RE.fullmatch(project):
+        raise HTTPException(status_code=400, detail=f"Unknown project '{project}' — must be one of: {', '.join(DEPIN_PROJECTS)}")
+
+
+def _depin_parse_logs(log_lines: list[str], project: str) -> tuple[str, str]:
+    patterns = DEPIN_HEALTH_PATTERNS.get(project, {})
+    joined = "\n".join(log_lines)
+    if not joined.strip():
+        return "unknown", ""
+    label = "unknown"
+    if project == "honeygain":
+        if patterns.get("connected") and patterns["connected"].search(joined):
+            label = "connected"
+        elif patterns.get("disconnected") and patterns["disconnected"].search(joined):
+            label = "disconnected"
+    elif project == "urnetwork":
+        if patterns.get("active") and patterns["active"].search(joined):
+            label = "active"
+        elif patterns.get("inactive") and patterns["inactive"].search(joined):
+            label = "inactive"
+    elif project == "myst":
+        if patterns.get("active") and patterns["active"].search(joined):
+            label = "active"
+        elif patterns.get("inactive") and patterns["inactive"].search(joined):
+            label = "inactive"
+    elif project == "anyone":
+        if patterns.get("healthy") and patterns["healthy"].search(joined):
+            label = "healthy"
+        elif patterns.get("unhealthy") and patterns["unhealthy"].search(joined):
+            label = "unhealthy"
+    return label, joined
+
+
+def _depin_project_status(project: str) -> dict:
+    unit = _depin_service_unit(project)
+    installed = _service_installed(unit)
+    service_info = _service_info(unit) if installed else {"unit": unit, "state": "not-installed", "since": ""}
+    enabled = False
+    if installed:
+        rc, out, _ = _run(["systemctl", "is-enabled", unit])
+        enabled = (rc == 0 and out.strip() == "enabled")
+    log_rc, log_out, _ = _run(
+        ["journalctl", "-u", unit, "-n", str(DEPIN_LOG_LINES), "--no-pager", "--output=cat"],
+        timeout=10,
+    )
+    log_lines = log_out.splitlines() if log_rc == 0 else []
+    health_label, raw_logs = _depin_parse_logs(log_lines, project)
+    return {
+        "project": project,
+        "installed": installed,
+        "enabled": enabled,
+        "service_state": service_info["state"],
+        "since": service_info.get("since", ""),
+        "configured": _depin_is_configured(project),
+        "config_required": project in DEPIN_CONFIG_REQUIRED,
+        "health": health_label,
+        "logs": log_lines[-DEPIN_LOG_LINES:],
+        "update_available": False,
+    }
+
+
+def _depin_check_config(project: str) -> None:
+    if project in DEPIN_CONFIG_REQUIRED and not _depin_is_configured(project):
+        detail = f"{project} requires configuration before being enabled — call /api/depin/{project}/configure first"
+        raise HTTPException(status_code=409, detail=detail)
+
+
+# ── GET /api/depin/status ────────────────────────────────────────────────────
+
+@app.get("/api/depin/status")
+def api_depin_status(_: Auth):
+    return {"projects": {p: _depin_project_status(p) for p in DEPIN_PROJECTS}}
+
+
+# ── POST /api/depin/{project}/configure ──────────────────────────────────────
+
+@app.post("/api/depin/{project}/configure")
+async def api_depin_configure(_: Auth, project: str, request: Request):
+    _depin_validate_project(project)
+
+    if project in ("urnetwork", "myst"):
+        raise HTTPException(status_code=400, detail=f"{project} does not require configuration")
+
+    if not Path(DEPIN_WRAPPER).exists():
+        raise HTTPException(status_code=503, detail="depin-config-wrapper not installed — run install-wrappers.sh")
+
+    body = await request.json()
+
+    if project == "honeygain":
+        device_name = str(body.get("device_name", "")).strip()
+        email = str(body.get("email", "")).strip()
+        password = str(body.get("password", ""))
+
+        if not device_name:
+            raise HTTPException(status_code=400, detail="device_name is required")
+        if not email:
+            raise HTTPException(status_code=400, detail="email is required")
+        if not password:
+            raise HTTPException(status_code=400, detail="password is required")
+        if len(device_name) > 64:
+            raise HTTPException(status_code=400, detail="device_name too long")
+        if len(email) > 320:
+            raise HTTPException(status_code=400, detail="email too long")
+        if len(password) > 128:
+            raise HTTPException(status_code=400, detail="password too long")
+        if not DEPIN_DEVICE_RE.fullmatch(device_name):
+            raise HTTPException(status_code=400, detail="device_name must be alphanumeric and hyphens only")
+        if "@" not in email or "." not in email.split("@")[-1] if "@" in email else True:
+            raise HTTPException(status_code=400, detail="invalid email format")
+        if SHELL_META_RE.search(password):
+            raise HTTPException(status_code=400, detail="password contains invalid characters")
+        if "\n" in password or "\r" in password:
+            raise HTTPException(status_code=400, detail="password contains newlines")
+
+        rc, out, err = _run(["sudo", DEPIN_WRAPPER, "honeygain", device_name, email, password], timeout=15)
+
+    elif project == "anyone":
+        nickname = str(body.get("nickname", "")).strip()
+        contact = str(body.get("contact", "")).strip()
+        myfamily = str(body.get("myfamily", "")).strip() or None
+
+        if not nickname:
+            raise HTTPException(status_code=400, detail="nickname is required")
+        if not contact:
+            raise HTTPException(status_code=400, detail="contact is required")
+        if len(nickname) > 19:
+            raise HTTPException(status_code=400, detail="nickname too long (max 19)")
+        if len(contact) > 255:
+            raise HTTPException(status_code=400, detail="contact too long")
+        if not DEPIN_NICKNAME_RE.fullmatch(nickname):
+            raise HTTPException(status_code=400, detail="nickname must be alphanumeric only (1-19 chars)")
+        if SHELL_META_RE.search(nickname) or SHELL_META_RE.search(contact):
+            raise HTTPException(status_code=400, detail="input contains invalid characters")
+        if myfamily and SHELL_META_RE.search(myfamily):
+            raise HTTPException(status_code=400, detail="myfamily contains invalid characters")
+
+        args = ["sudo", DEPIN_WRAPPER, "anyone", nickname, contact]
+        if myfamily:
+            args.append(myfamily)
+        rc, out, err = _run(args, timeout=15)
+
+    if rc != 0:
+        detail = (err or out).strip() or "config write failed"
+        raise HTTPException(status_code=500, detail=detail)
+
+    return {"ok": True, "project": project, "configured": _depin_is_configured(project)}
+
+
+# ── POST /api/depin/{project}/enable ─────────────────────────────────────────
+
+@app.post("/api/depin/{project}/enable")
+def api_depin_enable(_: Auth, project: str):
+    _depin_validate_project(project)
+    _depin_check_config(project)
+    unit = _depin_service_unit(project)
+    if not _service_installed(unit):
+        raise HTTPException(status_code=503, detail=f"{unit} not installed — run install-depin-services.sh")
+    rc, _, err = _run(["sudo", _SYSTEMCTL, "enable", "--now", unit])
+    if rc != 0:
+        raise HTTPException(status_code=500, detail=err or "enable failed")
+    return {"ok": True, "project": project, "enabled": True}
+
+
+# ── POST /api/depin/{project}/disable ────────────────────────────────────────
+
+@app.post("/api/depin/{project}/disable")
+def api_depin_disable(_: Auth, project: str):
+    _depin_validate_project(project)
+    unit = _depin_service_unit(project)
+    rc, _, err = _run(["sudo", _SYSTEMCTL, "disable", "--now", unit])
+    if rc != 0:
+        raise HTTPException(status_code=500, detail=err or "disable failed")
+    return {"ok": True, "project": project, "enabled": False}
+
+
+# ── POST /api/depin/{project}/uninstall ──────────────────────────────────────
+
+@app.post("/api/depin/{project}/uninstall")
+async def api_depin_uninstall(_: Auth, project: str, request: Request):
+    _depin_validate_project(project)
+
+    if not Path(DEPIN_UNINSTALL).exists():
+        raise HTTPException(status_code=503, detail="depin-uninstall.sh not installed")
+
+    body = await request.json()
+    confirm = body.get("confirm")
+    if confirm is not True:
+        raise HTTPException(status_code=400, detail="uninstall requires 'confirm': true in request body")
+
+    rc, out, err = _run(["sudo", DEPIN_UNINSTALL, project], timeout=60)
+    if rc != 0:
+        raise HTTPException(status_code=500, detail=err or out.strip() or "uninstall failed")
+    return {"ok": True, "project": project, "uninstalled": True}
+
+
+# ── POST /api/depin/{project}/update ─────────────────────────────────────────
+
+@app.post("/api/depin/{project}/update")
+def api_depin_update(_: Auth, project: str):
+    _depin_validate_project(project)
+    raise HTTPException(status_code=501, detail="update not yet implemented (Phase 5)")
+
+
+# ── POST /api/depin/{project}/auto-update ─────────────────────────────────────
+
+@app.post("/api/depin/{project}/auto-update")
+def api_depin_auto_update(_: Auth, project: str):
+    _depin_validate_project(project)
+    raise HTTPException(status_code=501, detail="auto-update not yet implemented (Phase 5)")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
