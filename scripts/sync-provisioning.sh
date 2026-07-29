@@ -160,26 +160,75 @@ if [ -f "${DEPIN_DIR}/honeygain.env" ]; then
 fi
 
 # URnetwork data directory
+# Container runs as root (no USER in image config — verified via registry
+# inspection of bringyour/community-provider:g4-latest arm64 manifest).
 URNET_DIR="/var/lib/gateway-ui/urnetwork"
-if [ ! -d "$URNET_DIR" ]; then
+if [ -d "$URNET_DIR" ]; then
+    cur_owner=$(stat -c '%U:%G' "$URNET_DIR" 2>/dev/null || true)
+    if [ "$cur_owner" != "root:root" ]; then
+        chown root:root "$URNET_DIR" && \
+            chmod 755 "$URNET_DIR" && \
+            log "Corrected ${URNET_DIR} ownership to root:root (was ${cur_owner})" || \
+            log "WARNING: Failed to chown ${URNET_DIR}"
+    fi
+else
     mkdir -p "$URNET_DIR"
     chown root:root "$URNET_DIR"
     chmod 755 "$URNET_DIR"
-    log "Created ${URNET_DIR}"
+    log "Created ${URNET_DIR} (root:root 755)"
 fi
 
 # Anyone data directories
-for d in \
-    /var/lib/gateway-ui/anyone/etc \
-    /var/lib/gateway-ui/anyone/var \
-    /var/lib/gateway-ui/anyone/run; do
-    if [ ! -d "$d" ]; then
-        mkdir -p "$d"
-        chown root:root "$d"
-        chmod 755 "$d"
-        log "Created ${d}"
+# etc:  configs read by root at container start — root:root 755
+# var:  data directory, writable by anond (UID 100) after privilege drop
+# run:  runtime directory, writable by anond (UID 100) after privilege drop
+# UID/GID sourced from ghcr.io/anyone-protocol/ator-protocol:latest image layer
+# inspection (adduser --system creates anond with next-available system UID=100,
+# GID=101 on Debian Bookworm base).
+ANOND_UID=100
+ANOND_GID=101
+
+# etc directory (read-only for container)
+if [ ! -d /var/lib/gateway-ui/anyone/etc ]; then
+    mkdir -p /var/lib/gateway-ui/anyone/etc
+    chown root:root /var/lib/gateway-ui/anyone/etc
+    chmod 755 /var/lib/gateway-ui/anyone/etc
+    log "Created /var/lib/gateway-ui/anyone/etc"
+fi
+
+# var directory (writable by anond — durability check)
+if [ -d /var/lib/gateway-ui/anyone/var ]; then
+    cur_owner=$(stat -c '%U:%G' /var/lib/gateway-ui/anyone/var 2>/dev/null || true)
+    cur_mode=$(stat -c '%a' /var/lib/gateway-ui/anyone/var 2>/dev/null || true)
+    if [ "$cur_owner" != "${ANOND_UID}:${ANOND_GID}" ] || [ "$cur_mode" != "750" ]; then
+        chown ${ANOND_UID}:${ANOND_GID} /var/lib/gateway-ui/anyone/var && \
+            chmod 750 /var/lib/gateway-ui/anyone/var && \
+            log "Corrected /var/lib/gateway-ui/anyone/var ownership to ${ANOND_UID}:${ANOND_GID} 750 (was ${cur_owner}:${cur_mode})" || \
+            log "WARNING: Failed to chown /var/lib/gateway-ui/anyone/var"
     fi
-done
+else
+    mkdir -p /var/lib/gateway-ui/anyone/var
+    chown ${ANOND_UID}:${ANOND_GID} /var/lib/gateway-ui/anyone/var
+    chmod 750 /var/lib/gateway-ui/anyone/var
+    log "Created /var/lib/gateway-ui/anyone/var (${ANOND_UID}:${ANOND_GID} 750)"
+fi
+
+# run directory (writable by anond — durability check)
+if [ -d /var/lib/gateway-ui/anyone/run ]; then
+    cur_owner=$(stat -c '%U:%G' /var/lib/gateway-ui/anyone/run 2>/dev/null || true)
+    cur_mode=$(stat -c '%a' /var/lib/gateway-ui/anyone/run 2>/dev/null || true)
+    if [ "$cur_owner" != "${ANOND_UID}:${ANOND_GID}" ] || [ "$cur_mode" != "750" ]; then
+        chown ${ANOND_UID}:${ANOND_GID} /var/lib/gateway-ui/anyone/run && \
+            chmod 750 /var/lib/gateway-ui/anyone/run && \
+            log "Corrected /var/lib/gateway-ui/anyone/run ownership to ${ANOND_UID}:${ANOND_GID} 750 (was ${cur_owner}:${cur_mode})" || \
+            log "WARNING: Failed to chown /var/lib/gateway-ui/anyone/run"
+    fi
+else
+    mkdir -p /var/lib/gateway-ui/anyone/run
+    chown ${ANOND_UID}:${ANOND_GID} /var/lib/gateway-ui/anyone/run
+    chmod 750 /var/lib/gateway-ui/anyone/run
+    log "Created /var/lib/gateway-ui/anyone/run (${ANOND_UID}:${ANOND_GID} 750)"
+fi
 
 # Anyone anonrc durability — fix ownership if file exists
 if [ -f /var/lib/gateway-ui/anyone/etc/anonrc ]; then
