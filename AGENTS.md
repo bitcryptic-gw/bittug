@@ -11,6 +11,55 @@ A self-hosted Helium IoT gateway and ADS-B (Wingbits) station running on Raspber
 - **Never** run git operations beyond `git pull` on the Pi
 - **Never** use `git commit`, `git push`, `git merge`, or `git rebase` on the Pi
 
+## Device access — read this before touching any SSH/SCP command
+
+**Default position: OC must NEVER establish an SSH or SCP session to
+any device, for any reason, without the current task's prompt
+explicitly naming that device AND explicitly stating that this task
+authorizes access to it.**
+
+This applies with no exceptions:
+
+- A device being mentioned, described, or referenced in a prompt is
+  **not** the same as being authorized. Authorization must be
+  explicit — e.g. "this task grants permission to SSH into
+  `root@<hostname>`" — not implied by the device's name simply
+  appearing in background/context text.
+- A device having been accessed in a **previous** task or session is
+  **not** standing approval. Every task starts from zero. Permission
+  never carries forward, even to a near-identical follow-up task, even
+  later in the same day, even from the same person.
+- If a task's background material happens to include a device
+  hostname, SSH target, or connection detail, and the task itself does
+  not explicitly authorize connecting to it, **do not connect**. Proceed
+  with the parts of the task that don't require device access, and
+  flag the device-access gap as an open question in your output
+  instead of resolving it yourself.
+- This applies equally regardless of how low-risk the access seems,
+  how read-only the intended commands are, or how confident OC is that
+  the person would say yes if asked. Confidence is not authorization.
+  Ask.
+- If a prompt is ambiguous about whether device access is authorized,
+  treat it as **not authorized** and ask, rather than proceeding and
+  hoping the ambiguity resolves in OC's favor.
+
+**Before running any command that begins with `ssh` or `scp` (or
+invokes them indirectly, e.g. via a script), stop and confirm: does
+*this specific task's prompt* explicitly authorize this specific
+device? If the answer isn't a clear yes, do not run the command — ask
+the person instead, stating the target device and the exact commands
+you intend to run, and wait for their response before proceeding.**
+
+This rule exists independently of, and in addition to, any per-prompt
+reminder about device access that may also appear in a given task's
+instructions. The rule lives here so it cannot be missed by a task
+that forgets to restate it.
+
+**Before taking any action in this task, state explicitly: "Devices
+this task authorizes me to access: [none, OR list them by hostname]."**
+Do this even when the answer is "none" — the explicit statement is
+the checkpoint, not a formality.
+
 ## Repo layout
 
 ```
