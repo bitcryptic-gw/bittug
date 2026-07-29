@@ -162,6 +162,10 @@ echo "--- Systemd Units ---"
 for unit in "${REPO_DIR}"/systemd/*.service "${REPO_DIR}"/systemd/*.timer; do
     [ -e "$unit" ] || continue
     name=$(basename "$unit")
+    if [[ "$name" == depin-* ]]; then
+        info "Skipped ${name} (DePIN units are user-enabled via gateway-ui)"
+        continue
+    fi
     cp "$unit" "/etc/systemd/system/${name}"
     info "Copied ${name}"
     systemctl enable "$name" 2>/dev/null || \
