@@ -7,6 +7,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStartPre=-/usr/bin/docker rm -f anyone
+ExecStartPre=-/opt/gateway/scripts/depin-anyone-uid-check.sh
 ExecStart=/usr/bin/docker run \
   --name anyone \
   --restart no \
