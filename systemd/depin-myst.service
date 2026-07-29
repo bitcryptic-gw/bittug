@@ -1,0 +1,28 @@
+[Unit]
+Description=DePIN — Mysterium
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/docker rm -f myst
+ExecStart=/usr/bin/docker run \
+  --name myst \
+  --restart no \
+  --network bridge \
+  --memory=256m \
+  --cpus=1.0 \
+  --cap-add NET_ADMIN \
+  -p 4449:4449/tcp \
+  -v myst-data:/var/lib/mysterium-node \
+  mysteriumnetwork/myst:latest \
+  service --agreed-terms-and-conditions
+Restart=on-failure
+RestartSec=15
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=depin-myst
+
+[Install]
+WantedBy=multi-user.target

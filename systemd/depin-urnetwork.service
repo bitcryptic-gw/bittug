@@ -1,0 +1,27 @@
+[Unit]
+Description=DePIN — URnetwork
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/docker rm -f urnetwork
+ExecStart=/usr/bin/docker run \
+  --name urnetwork \
+  --restart no \
+  --network bridge \
+  --memory=256m \
+  --cpus=1.0 \
+  -e WARP_ENV=community \
+  -v /var/lib/gateway-ui/urnetwork:/root/.urnetwork \
+  bringyour/community-provider:g4-latest \
+  provide
+Restart=on-failure
+RestartSec=15
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=depin-urnetwork
+
+[Install]
+WantedBy=multi-user.target
