@@ -224,12 +224,9 @@ function renderBeacon(d) {
   const lb = d.last_beacon
     ? fmtTimestamp(d.last_beacon.timestamp)
     : '<span class="dim">none recorded</span>';
-  const nb = d.next_beacon
-    ? fmtTimestamp(d.next_beacon)
-    : '<span class="dim">unknown</span>';
-  el.innerHTML = kv([
+  el.innerHTML = '<p class="hint" style="margin-bottom:.75rem;line-height:1.5">PoC beaconing retired network-wide (HIP-149); this card reflects legacy IoT data no longer generated.</p>' + kv([
     ['Last beacon',      lb],
-    ['Next beacon',      nb],
+    ['Next beacon',      '<span class="dim">N/A</span>'],
     ['Witnesses (24 h)', `<strong>${d.witness_count_24h}</strong>`],
   ]);
 }
