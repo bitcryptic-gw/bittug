@@ -61,6 +61,7 @@ gateway-ui ALL=(root) NOPASSWD: /bin/systemctl restart gateway-rs
 gateway-ui ALL=(root) NOPASSWD: /opt/gateway/scripts/apply-band.sh
 gateway-ui ALL=(root) NOPASSWD: /opt/gateway/scripts/apply-timezone.sh
 gateway-ui ALL=(root) NOPASSWD: /opt/gateway/scripts/apply-hostname.sh
+gateway-ui ALL=(root) NOPASSWD: /usr/local/bin/depin-config-wrapper
 SUDOERS
 chmod 0440 /etc/sudoers.d/10-gateway-ui
 if visudo -c -f /etc/sudoers.d/10-gateway-ui; then
@@ -124,6 +125,71 @@ if [ -d "$REPO_GIT_DIR" ]; then
     fi
 else
     log "WARNING: ${REPO_GIT_DIR} not found — skipping .git write-access check"
+fi
+
+# --- DePIN directories and credential durability ---
+# Creates the directory tree so EnvironmentFile= references resolve cleanly
+# at unit start time (fail-fast, not fail-later). Re-fixes ownership on
+# every run — durable, not one-shot.
+DEPIN_DIR="/etc/gateway-ui/depin"
+if [ -d "$DEPIN_DIR" ]; then
+    cur_mode=$(stat -c '%a' "$DEPIN_DIR" 2>/dev/null || true)
+    cur_owner=$(stat -c '%U:%G' "$DEPIN_DIR" 2>/dev/null || true)
+    if [ "$cur_owner" != "root:gateway-ui" ] || [ "$cur_mode" != "750" ]; then
+        chown root:gateway-ui "$DEPIN_DIR" && \
+            chmod 750 "$DEPIN_DIR" && \
+            log "Corrected ${DEPIN_DIR} ownership to root:gateway-ui (was ${cur_owner}:${cur_mode})" || \
+            log "WARNING: Failed to chown ${DEPIN_DIR}"
+    fi
+else
+    mkdir -p "$DEPIN_DIR"
+    chown root:gateway-ui "$DEPIN_DIR"
+    chmod 750 "$DEPIN_DIR"
+    log "Created ${DEPIN_DIR} (root:gateway-ui 750)"
+fi
+
+# Honeygain env file durability — fix ownership if file exists
+if [ -f "${DEPIN_DIR}/honeygain.env" ]; then
+    cur_owner=$(stat -c '%U:%G' "${DEPIN_DIR}/honeygain.env" 2>/dev/null || true)
+    if [ "$cur_owner" != "root:gateway-ui" ]; then
+        chown root:gateway-ui "${DEPIN_DIR}/honeygain.env" && \
+            chmod 640 "${DEPIN_DIR}/honeygain.env" && \
+            log "Corrected honeygain.env ownership to root:gateway-ui (was ${cur_owner})" || \
+            log "WARNING: Failed to chown ${DEPIN_DIR}/honeygain.env"
+    fi
+fi
+
+# URnetwork data directory
+URNET_DIR="/var/lib/gateway-ui/urnetwork"
+if [ ! -d "$URNET_DIR" ]; then
+    mkdir -p "$URNET_DIR"
+    chown root:root "$URNET_DIR"
+    chmod 755 "$URNET_DIR"
+    log "Created ${URNET_DIR}"
+fi
+
+# Anyone data directories
+for d in \
+    /var/lib/gateway-ui/anyone/etc \
+    /var/lib/gateway-ui/anyone/var \
+    /var/lib/gateway-ui/anyone/run; do
+    if [ ! -d "$d" ]; then
+        mkdir -p "$d"
+        chown root:root "$d"
+        chmod 755 "$d"
+        log "Created ${d}"
+    fi
+done
+
+# Anyone anonrc durability — fix ownership if file exists
+if [ -f /var/lib/gateway-ui/anyone/etc/anonrc ]; then
+    cur_owner=$(stat -c '%U:%G' /var/lib/gateway-ui/anyone/etc/anonrc 2>/dev/null || true)
+    if [ "$cur_owner" != "root:root" ]; then
+        chown root:root /var/lib/gateway-ui/anyone/etc/anonrc && \
+            chmod 644 /var/lib/gateway-ui/anyone/etc/anonrc && \
+            log "Corrected anonrc ownership to root:root (was ${cur_owner})" || \
+            log "WARNING: Failed to chown /var/lib/gateway-ui/anyone/etc/anonrc"
+    fi
 fi
 
 log "sync-provisioning complete"

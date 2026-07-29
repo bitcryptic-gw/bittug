@@ -6,7 +6,6 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=/etc/gateway-ui/depin/anyone.env
 ExecStartPre=-/usr/bin/docker rm -f anyone
 ExecStart=/usr/bin/docker run \
   --name anyone \
