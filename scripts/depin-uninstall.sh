@@ -20,10 +20,12 @@ UNIT="depin-${PROJECT}.service"
 IMAGE=""
 DATA_DIRS=()
 VOLUME=""
+CRED_FILE=""
 
 case "$PROJECT" in
     honeygain)
         IMAGE="honeygain/honeygain:latest"
+        CRED_FILE="/etc/gateway-ui/depin/honeygain.env"
         ;;
     urnetwork)
         IMAGE="bringyour/community-provider:g4-latest"
@@ -51,6 +53,19 @@ systemctl disable "$UNIT" 2>/dev/null || true
 
 # Remove any leftover container
 /usr/bin/docker rm -f "$PROJECT" 2>/dev/null || true
+
+# Remove credential/config file (Honeygain only)
+if [ -n "$CRED_FILE" ]; then
+    if [ -f "$CRED_FILE" ]; then
+        echo "Removing credential file $CRED_FILE..."
+        rm -f "$CRED_FILE"
+        if [ -f "$CRED_FILE" ]; then
+            echo "WARNING: Failed to remove $CRED_FILE" >&2
+        else
+            echo "Credential file removed"
+        fi
+    fi
+fi
 
 # Remove bind-mounted data directories' contents
 for d in "${DATA_DIRS[@]}"; do

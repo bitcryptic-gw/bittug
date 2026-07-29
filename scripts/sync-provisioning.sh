@@ -67,6 +67,7 @@ gateway-ui ALL=(root) NOPASSWD: /bin/systemctl enable depin-*.service
 gateway-ui ALL=(root) NOPASSWD: /bin/systemctl disable depin-*.service
 gateway-ui ALL=(root) NOPASSWD: /bin/systemctl start depin-*.service
 gateway-ui ALL=(root) NOPASSWD: /bin/systemctl stop depin-*.service
+gateway-ui ALL=(root) NOPASSWD: /bin/systemctl restart depin-*.service
 SUDOERS
 chmod 0440 /etc/sudoers.d/10-gateway-ui
 if visudo -c -f /etc/sudoers.d/10-gateway-ui; then
