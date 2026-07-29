@@ -1282,7 +1282,27 @@ async function checkOtaChanges() {
     }
     const bootNote = document.getElementById('ota-boot-note');
     if (d.boot_changes && d.boot_changes.length > 0) {
-      bootNote.textContent = 'Provisioning files changed (' + d.boot_changes.join(', ') + ') — requires manual re-run of bootstrap.sh.';
+      const provisioning = ['boot/bootstrap.sh', 'boot/firstrun.sh', 'boot/config.txt'];
+      const release = ['boot/build-image.sh', 'boot/tag-release.sh'];
+
+      const a = d.boot_changes.filter(f => provisioning.includes(f));
+      const b = d.boot_changes.filter(f => release.includes(f));
+      const other = d.boot_changes.filter(f => !provisioning.includes(f) && !release.includes(f));
+
+      const esc = (arr) => arr.map(f => f.replace(/</g, '&lt;').replace(/>/g, '&gt;')).join(', ');
+
+      const parts = [];
+      if (a.length > 0) {
+        parts.push('Provisioning files changed (' + esc(a) + ') \u2014 these apply to fresh device setups only; no action needed on this device.');
+      }
+      if (b.length > 0) {
+        parts.push('Release tooling changed (' + esc(b) + ') \u2014 runs on the Mac only, not on this device; no action needed.');
+      }
+      if (other.length > 0) {
+        parts.push('Files changed in boot/ (' + esc(other) + ') \u2014 no action needed on this device.');
+      }
+
+      bootNote.innerHTML = parts.join('<br>');
       bootNote.classList.remove('hidden');
     } else {
       bootNote.classList.add('hidden');
