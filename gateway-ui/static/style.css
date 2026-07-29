@@ -874,3 +874,81 @@ code.addr {
   text-align: center;
   padding: .75rem 0;
 }
+
+/* ── DePIN ───────────────────────────────────────────────────────────────────── */
+
+.depin-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+}
+
+.depin-log-snippet {
+  font-family: var(--mono);
+  font-size: .72rem;
+  margin-top: .5rem;
+  padding: .4rem .5rem;
+  background: var(--bg);
+  border-radius: var(--radius);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 3.6em;
+  line-height: 1.2;
+}
+
+.depin-uninstall-section {
+  border-top: 1px solid var(--border);
+  padding: .75rem 1.1rem;
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  flex-wrap: wrap;
+}
+
+.depin-uninstall-section .btn-danger {
+  font-size: .75rem;
+  padding: .35rem .75rem;
+}
+
+.depin-confirm-row {
+  border-top: 1px solid var(--border);
+  padding: .75rem 1.1rem;
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  flex-wrap: wrap;
+  font-size: .83rem;
+}
+
+.depin-update-controls {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  margin-top: .5rem;
+  font-size: .8rem;
+  color: var(--text-dim);
+}
+
+.depin-auto-check {
+  display: flex;
+  align-items: center;
+  gap: .3rem;
+  cursor: not-allowed;
+  font-size: .8rem;
+}
+
+.depin-warning {
+  background: rgba(245,166,35,.10);
+  border: 1px solid rgba(245,166,35,.25);
+  border-radius: var(--radius);
+  padding: .65rem .85rem;
+  font-size: .8rem;
+  line-height: 1.55;
+  color: var(--yellow);
+}
+
+.depin-warning strong {
+  color: var(--text);
+}

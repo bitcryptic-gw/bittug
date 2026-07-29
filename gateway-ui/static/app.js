@@ -21,6 +21,11 @@ const state = {
   cachedVersion:   null,
 };
 
+const depinState = {
+  interval: null,
+  uninstalling: null,
+};
+
 // ── API ───────────────────────────────────────────────────────────────────────
 
 async function api(path, method = 'GET', body = null) {
@@ -102,9 +107,11 @@ function switchTab(name) {
   clearInterval(state.logInterval);
   clearInterval(state.dashInterval);
   clearInterval(state.netInterval);
+  clearInterval(depinState.interval);
   state.logInterval = null;
   state.dashInterval = null;
   state.netInterval = null;
+  depinState.interval = null;
 
   if (state.wingbitsAbort) {
     state.wingbitsAbort.abort();
@@ -115,6 +122,7 @@ function switchTab(name) {
 
   if (name === 'dashboard')     startDashboardRefresh();
   if (name === 'applications')  loadApplications();
+  if (name === 'depin')         startDepinRefresh();
   if (name === 'network')       startNetworkRefresh();
   if (name === 'logs')          startLogAutoRefresh();
   if (name === 'settings')      loadSettings();
@@ -1737,6 +1745,189 @@ async function sendNtfyTest() {
   }
 }
 
+// ── DePIN ─────────────────────────────────────────────────────────────────────
+
+function startDepinRefresh() {
+  loadDepin();
+  depinState.interval = setInterval(loadDepin, 30_000);
+}
+
+async function loadDepin() {
+  try {
+    const d = await api('/api/depin/status');
+    renderDepin(d);
+    depinPreFill();
+  } catch (e) {
+    if (e.message !== 'unauthorized') {
+      document.querySelectorAll('.depin-status-body').forEach(el => {
+        if (el.querySelector('.spinner')) el.innerHTML = `<span class="dim">Error loading status</span>`;
+      });
+    }
+  }
+}
+
+let _depinPrefilled = false;
+async function depinPreFill() {
+  if (_depinPrefilled) return;
+  try {
+    const host = await api('/api/hostname');
+    const input = document.getElementById('hg-device');
+    if (input && !input.value && host.hostname) {
+      input.value = host.hostname;
+      _depinPrefilled = true;
+    }
+  } catch {}
+}
+
+function depinBadge(project, s) {
+  const d = s || {};
+  if (!d.installed) return '<span class="badge badge-dim">Not installed</span>';
+  if (!d.enabled) return '<span class="badge badge-yellow">Stopped</span>';
+  if (d.service_state === 'active') {
+    const cls = d.health === 'unknown' ? 'green' : d.health === 'connected' || d.health === 'active' || d.health === 'healthy' ? 'green' : 'yellow';
+    const label = { connected: 'Connected', disconnected: 'Disconnected', active: 'Active', inactive: 'Inactive', healthy: 'Healthy', unhealthy: 'Unhealthy', unknown: 'Running' }[d.health] || 'Running';
+    return `<span class="badge badge-${cls}">${label}</span>`;
+  }
+  return '<span class="badge badge-red">Failed</span>';
+}
+
+function depinHealthLine(d) {
+  if (!d.logs || !d.logs.length) return '';
+  const lastLines = d.logs.slice(-3).map(l => l.trim()).filter(l => l).join(' / ');
+  if (!lastLines) return '';
+  return `<div class="depin-log-snippet dim">${escHtml(lastLines)}</div>`;
+}
+
+function depinEnabledToggle(project, d) {
+  if (!d.installed) return '';
+  const checked = d.enabled ? ' checked' : '';
+  const disabled = '';
+  return `<div class="toggle-row">
+    <span>${d.enabled ? 'Enabled' : 'Disabled'}</span>
+    <label class="switch" aria-label="Enable ${project}">
+      <input type="checkbox" class="depin-toggle" data-project="${project}"${checked}${disabled}>
+      <span class="slider"></span>
+    </label>
+  </div>`;
+}
+
+function depinUpdateControls(project) {
+  return `<div class="depin-update-controls">
+    <button class="btn btn-sm" disabled title="Update checking not yet available (coming in a future update)">Update</button>
+    <label class="depin-auto-check"><input type="checkbox" disabled> Auto-update</label>
+  </div>`;
+}
+
+function renderDepin(d) {
+  const projects = d.projects || {};
+  const names = {
+    honeygain: 'Honeygain', urnetwork: 'URnetwork', myst: 'Mysterium', anyone: 'Anyone Protocol'
+  };
+
+  for (const project of Object.keys(names)) {
+    const s = projects[project] || {};
+    const statusEl = document.querySelector(`.depin-status-body[data-project="${project}"]`);
+    const configEl = document.querySelector(`.depin-config-body[data-project="${project}"]`);
+
+    if (statusEl) {
+      statusEl.innerHTML =
+        '<div class="depin-status-row">' + depinBadge(project, s) + depinEnabledToggle(project, s) + '</div>' +
+        depinHealthLine(s) +
+        depinUpdateControls(project);
+    }
+
+    if (configEl) {
+      if (s.installed && s.configured) {
+        configEl.classList.add('hidden');
+      } else {
+        configEl.classList.remove('hidden');
+      }
+    }
+  }
+}
+
+async function depinConfigure(project) {
+  const el = document.getElementById(`depin-result-${project}`);
+  const btn = document.querySelector(`.depin-configure-btn[data-project="${project}"]`);
+  try {
+    let body;
+    if (project === 'honeygain') {
+      body = {
+        device_name: document.getElementById('hg-device').value.trim(),
+        email: document.getElementById('hg-email').value.trim(),
+        password: document.getElementById('hg-password').value,
+      };
+      if (!body.device_name) { showResult(`depin-result-${project}`, 'Device name is required', true); return; }
+      if (!body.email) { showResult(`depin-result-${project}`, 'Email is required', true); return; }
+      if (!body.password) { showResult(`depin-result-${project}`, 'Password is required', true); return; }
+    } else if (project === 'anyone') {
+      body = {
+        nickname: document.getElementById('any-nickname').value.trim(),
+        contact: document.getElementById('any-contact').value.trim(),
+        myfamily: document.getElementById('any-myfamily').value.trim(),
+      };
+      if (!body.nickname) { showResult(`depin-result-${project}`, 'Nickname is required', true); return; }
+      if (!body.contact) { showResult(`depin-result-${project}`, 'Contact info is required', true); return; }
+    }
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    await api(`/api/depin/${project}/configure`, 'POST', body);
+    showResult(`depin-result-${project}`, 'Saved ✓', false);
+    document.getElementById(`hg-password`).value = '';
+    if (document.getElementById(`any-myfamily`)) document.getElementById(`any-myfamily`).value = '';
+    setTimeout(loadDepin, 500);
+  } catch (e) {
+    if (e.message !== 'unauthorized') showResult(`depin-result-${project}`, e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Save & Configure';
+  }
+}
+
+async function depinToggle(project, enabled) {
+  const action = enabled ? 'enable' : 'disable';
+  try {
+    await api(`/api/depin/${project}/${action}`, 'POST');
+    setTimeout(loadDepin, 1000);
+  } catch (e) {
+    if (e.message !== 'unauthorized') alert(`${project}: ${e.message}`);
+    setTimeout(loadDepin, 500);
+  }
+}
+
+function depinUninstall(project, label, msg) {
+  const section = document.getElementById(`depin-uninstall-${project}`);
+  if (!section) return;
+  if (depinState.uninstalling === project) { depinState.uninstalling = null; section.querySelector('.depin-confirm-row')?.remove(); return; }
+  depinState.uninstalling = project;
+  const existing = section.querySelector('.depin-confirm-row');
+  if (existing) existing.remove();
+  const row = document.createElement('div');
+  row.className = 'depin-confirm-row';
+  row.innerHTML =
+    `<span class="warn-text">${escHtml(msg)}</span>` +
+    `<button class="btn btn-sm btn-danger depin-uninstall-exec" data-project="${project}">Yes, Uninstall</button>` +
+    `<a href="#" class="confirm-cancel">&nbsp;Cancel</a>`;
+  section.appendChild(row);
+  row.querySelector('.confirm-cancel').addEventListener('click', e => { e.preventDefault(); depinState.uninstalling = null; row.remove(); });
+  row.querySelector('.depin-uninstall-exec').addEventListener('click', async () => {
+    const btn = row.querySelector('.depin-uninstall-exec');
+    btn.disabled = true;
+    btn.textContent = 'Uninstalling…';
+    try {
+      await api(`/api/depin/${project}/uninstall`, 'POST', { confirm: true });
+      showResult(`depin-uninstall-result-${project}`, 'Uninstalled ✓', false);
+      row.remove();
+      depinState.uninstalling = null;
+      setTimeout(loadDepin, 1000);
+    } catch (e) {
+      if (e.message !== 'unauthorized') showResult(`depin-uninstall-result-${project}`, e.message, true);
+      btn.disabled = false;
+      btn.textContent = 'Yes, Uninstall';
+    }
+  });
+}
+
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
 function kv(pairs) {
@@ -1770,6 +1961,11 @@ function showResult(id, msg, isError) {
   el.textContent = msg;
   el.className = 'result-msg ' + (isError ? 'result-error' : 'result-ok');
   setTimeout(() => { el.textContent = ''; el.className = 'result-msg'; }, 5000);
+}
+
+function escHtml(s) {
+  const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  return s.replace(/[&<>"']/g, c => map[c]);
 }
 
 // ── Event Wiring ──────────────────────────────────────────────────────────────
@@ -1946,6 +2142,32 @@ function wireEvents() {
   document.getElementById('btn-reveal-token').addEventListener('click', revealToken);
   document.getElementById('btn-regen-token').addEventListener('click', regenToken);
   document.getElementById('btn-copy-token').addEventListener('click', copyToken);
+
+  // DePIN — configure buttons (delegated)
+  document.getElementById('depin-grid').addEventListener('click', function(e) {
+    const btn = e.target.closest('.depin-configure-btn');
+    if (btn) { depinConfigure(btn.dataset.project); return; }
+    const uninstallBtn = e.target.closest('.depin-uninstall-btn');
+    if (uninstallBtn) {
+      const project = uninstallBtn.dataset.project;
+      const labels = { honeygain: 'Honeygain', urnetwork: 'URnetwork', myst: 'Mysterium', anyone: 'Anyone Protocol' };
+      const msgs = {
+        honeygain: `This will remove the ${labels[project]} container, image, and your saved credentials. You'll need to re-enter your email and password to use Honeygain again.`,
+        urnetwork: `This will remove ${labels[project]}'s stored identity and the pulled image. ${labels[project]} will generate a new identity if re-enabled — any accumulated history tied to the current identity will be lost.`,
+        myst: `This will remove ${labels[project]}'s wallet, identity, and the pulled image. A new identity will be generated if re-enabled — any accumulated reputation will be lost.`,
+        anyone: `This will remove the relay's data and pulled image, but keep your saved nickname/contact settings. The relay will get a new identity if re-enabled — its accumulated reputation will be lost.`,
+      };
+      depinUninstall(project, labels[project], msgs[project]);
+      return;
+    }
+  });
+
+  // DePIN — enable/disable toggles (delegated)
+  document.getElementById('depin-grid').addEventListener('change', function(e) {
+    const toggle = e.target.closest('.depin-toggle');
+    if (!toggle) return;
+    depinToggle(toggle.dataset.project, toggle.checked);
+  });
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
@@ -1965,6 +2187,8 @@ async function init() {
   }
 
   state.token = stored;
+  depinState.interval = null;
+  depinState.uninstalling = null;
   try {
     await api('/api/identity');
     hideModal();
