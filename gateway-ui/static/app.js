@@ -1782,13 +1782,13 @@ async function depinPreFill() {
 function depinBadge(project, s) {
   const d = s || {};
   if (!d.installed) return '<span class="badge badge-dim">Not installed</span>';
-  if (!d.enabled) return '<span class="badge badge-yellow">Stopped</span>';
+  if (!d.enabled) return '<span class="badge badge-yellow">Disabled</span>';
   if (d.service_state === 'active') {
     const cls = d.health === 'unknown' ? 'green' : d.health === 'connected' || d.health === 'active' || d.health === 'healthy' ? 'green' : 'yellow';
     const label = { connected: 'Connected', disconnected: 'Disconnected', active: 'Active', inactive: 'Inactive', healthy: 'Healthy', unhealthy: 'Unhealthy', unknown: 'Running' }[d.health] || 'Running';
     return `<span class="badge badge-${cls}">${label}</span>`;
   }
-  return '<span class="badge badge-red">Failed</span>';
+  return '<span class="badge badge-red">Error</span>';
 }
 
 function depinHealthLine(d) {
@@ -1830,8 +1830,12 @@ function renderDepin(d) {
     const configEl = document.querySelector(`.depin-config-body[data-project="${project}"]`);
 
     if (statusEl) {
+      const parts = [depinBadge(project, s), depinEnabledToggle(project, s)];
+      if (!s.configured && s.config_required && s.service_state !== 'active' && s.enabled) {
+        parts.push('<div class="depin-config-hint warn-text">Check configuration — configure this project first, then enable it</div>');
+      }
       statusEl.innerHTML =
-        '<div class="depin-status-row">' + depinBadge(project, s) + depinEnabledToggle(project, s) + '</div>' +
+        '<div class="depin-status-row">' + parts.join('') + '</div>' +
         depinHealthLine(s) +
         depinUpdateControls(project);
     }
