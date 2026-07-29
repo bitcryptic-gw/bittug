@@ -95,6 +95,13 @@ else
     green "Repo cloned at ${REPO_DIR}"
 fi
 
+# Grant gateway-ui write access to .git for OTA (2026-07-29)
+if id gateway-ui &>/dev/null; then
+    usermod -aG "$PRIMARY_USER" gateway-ui
+fi
+chmod -R g+rwX,g+s "${REPO_DIR}/.git"
+green ".git write access granted for gateway-ui (OTA)"
+
 # Mark repo as safe for all users (avoids dubious-ownership errors)
 git config --system --add safe.directory /opt/gateway
 green "Git safe.directory set for /opt/gateway"

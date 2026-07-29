@@ -130,6 +130,13 @@ if [ ! -d "$REPO_DIR" ]; then
 fi
 echo "[firstrun] $(date '+%H:%M:%S') Completed: repo clone"
 
+# Grant gateway-ui write access to .git for OTA (2026-07-29)
+if id gateway-ui &>/dev/null; then
+    usermod -aG "$PRIMARY_USER" gateway-ui
+fi
+chmod -R g+rwX,g+s "${REPO_DIR}/.git"
+echo "[firstrun] $(date '+%H:%M:%S') Completed: gateway-ui .git write access"
+
 # --- Run bootstrap.sh ---
 echo "[firstrun] $(date '+%H:%M:%S') Starting: bootstrap.sh"
 echo "[firstrun] Running bootstrap.sh..."

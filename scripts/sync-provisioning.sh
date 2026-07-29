@@ -102,4 +102,28 @@ else
     log "WARNING: settings.toml not found at ${SETTINGS_SRC} — skipping"
 fi
 
+# --- gateway-ui .git write-access durability check (2026-07-29) ---
+# Ensures gateway-ui retains write access to /opt/gateway/.git even if
+# something (git gc, re-clone, etc.) ever resets group ownership or the
+# setgid bit. Two independent conditions, both required.
+PRIMARY_USER=$(getent passwd | awk -F: '$3 >= 1000 && $3 < 65534 {print $1; exit}')
+REPO_GIT_DIR="/opt/gateway/.git"
+if [ -d "$REPO_GIT_DIR" ]; then
+    if id -nG gateway-ui | grep -qw "$PRIMARY_USER"; then
+        log "gateway-ui already in ${PRIMARY_USER} group — skipping"
+    else
+        log "Adding gateway-ui to ${PRIMARY_USER} group"
+        usermod -aG "$PRIMARY_USER" gateway-ui
+    fi
+
+    if stat -c '%A' "$REPO_GIT_DIR" | grep -q '^drwxrws'; then
+        log "${REPO_GIT_DIR} setgid bit already set — skipping"
+    else
+        log "Setting setgid bit on ${REPO_GIT_DIR}"
+        chmod -R g+rwX,g+s "$REPO_GIT_DIR"
+    fi
+else
+    log "WARNING: ${REPO_GIT_DIR} not found — skipping .git write-access check"
+fi
+
 log "sync-provisioning complete"
