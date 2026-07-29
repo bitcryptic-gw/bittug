@@ -41,3 +41,4 @@ env/
 *.tmp
 *.bak
 lora_pkt_fwd-reference*
+drafts/
