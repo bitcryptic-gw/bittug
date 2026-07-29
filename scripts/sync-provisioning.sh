@@ -68,6 +68,10 @@ gateway-ui ALL=(root) NOPASSWD: /bin/systemctl disable depin-*.service
 gateway-ui ALL=(root) NOPASSWD: /bin/systemctl start depin-*.service
 gateway-ui ALL=(root) NOPASSWD: /bin/systemctl stop depin-*.service
 gateway-ui ALL=(root) NOPASSWD: /bin/systemctl restart depin-*.service
+gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker pull honeygain/honeygain:latest
+gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker pull bringyour/community-provider:g4-latest
+gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker pull mysteriumnetwork/myst:latest
+gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker pull ghcr.io/anyone-protocol/ator-protocol:latest
 SUDOERS
 chmod 0440 /etc/sudoers.d/10-gateway-ui
 if visudo -c -f /etc/sudoers.d/10-gateway-ui; then

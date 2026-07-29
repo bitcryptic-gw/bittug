@@ -88,6 +88,9 @@ DEPIN_NICKNAME_RE = re.compile(r"^[a-zA-Z0-9]{1,19}$")
 DEPIN_CONFIG_REQUIRED = {"honeygain", "anyone"}
 DEPIN_ENV_DIR = Path("/etc/gateway-ui/depin")
 DEPIN_ANONRC = Path("/var/lib/gateway-ui/anyone/etc/anonrc")
+DEPIN_UPDATE_STATE = Path("/var/lib/gateway-ui/depin-update-state.json")
+DEPIN_AUTO_UPDATE = Path("/var/lib/gateway-ui/depin-auto-update.json")
+DEPIN_NOTIFY_PENDING = Path("/var/lib/gateway-ui/depin-notify-pending")
 
 DEPIN_IMAGES = {
     "honeygain": "honeygain/honeygain:latest",
@@ -1857,10 +1860,48 @@ async def _ntfy_notifier():
                     )
                     _ntfy_state["storage_alert"] = False
 
+            # ── Check: DePIN image updates ────────────────────────────────
+            _depin_check_notifications()
+
         except Exception as exc:
             logging.error("NTFY notifier error: %s", exc)
 
         await asyncio.sleep(60)
+
+
+def _depin_check_notifications() -> None:
+    if not DEPIN_NOTIFY_PENDING.exists():
+        return
+    try:
+        DEPIN_NOTIFY_PENDING.unlink()
+    except OSError:
+        return
+
+    state = {}
+    try:
+        if DEPIN_UPDATE_STATE.exists():
+            state = json.loads(DEPIN_UPDATE_STATE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return
+
+    hostname = socket.gethostname()
+    updated_projects = []
+    for proj in DEPIN_PROJECTS:
+        pinfo = state.get("projects", {}).get(proj, {})
+        if pinfo.get("update_available"):
+            digest = pinfo.get("remote_digest", "")
+            notified = _ntfy_state.get("depin_notified_digests", {}).get(proj)
+            if digest and notified != digest:
+                updated_projects.append(proj)
+                _ntfy_state.setdefault("depin_notified_digests", {})[proj] = digest
+
+    if not updated_projects:
+        return
+
+    label_map = {"honeygain": "Honeygain", "urnetwork": "URnetwork", "myst": "Mysterium", "anyone": "Anyone Protocol"}
+    names = [label_map.get(p, p) for p in updated_projects]
+    msg = f"DePIN update available: {', '.join(names)}\nRun 'Update' from the DePIN tab on {hostname} to apply."
+    asyncio.ensure_future(send_ntfy("DePIN Update Available", msg, "default", ["arrow_up", "docker"]))
 
 
 # ── Logs ─────────────────────────────────────────────────────────────────────
@@ -2015,8 +2056,18 @@ def _depin_project_status(project: str) -> dict:
         "config_required": project in DEPIN_CONFIG_REQUIRED,
         "health": health_label,
         "logs": log_lines[-DEPIN_LOG_LINES:],
-        "update_available": False,
+        "update_available": _depin_update_available(project),
     }
+
+
+def _depin_update_available(project: str) -> bool:
+    if not DEPIN_UPDATE_STATE.exists():
+        return False
+    try:
+        state = json.loads(DEPIN_UPDATE_STATE.read_text())
+        return bool(state.get("projects", {}).get(project, {}).get("update_available", False))
+    except (json.JSONDecodeError, OSError):
+        return False
 
 
 def _depin_check_config(project: str) -> None:
@@ -2158,15 +2209,66 @@ async def api_depin_uninstall(_: Auth, project: str, request: Request):
 @app.post("/api/depin/{project}/update")
 def api_depin_update(_: Auth, project: str):
     _depin_validate_project(project)
-    raise HTTPException(status_code=501, detail="update not yet implemented (Phase 5)")
+    image = DEPIN_IMAGES.get(project)
+    if not image:
+        raise HTTPException(status_code=500, detail=f"No image defined for {project}")
+    rc, out, err = _run(["sudo", "/usr/bin/docker", "pull", image], timeout=120)
+    if rc != 0:
+        raise HTTPException(status_code=500, detail=(err or out).strip() or "pull failed")
+    updated = "Downloaded newer image" in (out + err) or "Status: Downloaded" in (out + err)
+    if updated:
+        rc2, _, err2 = _run(["sudo", _SYSTEMCTL, "restart", f"depin-{project}.service"], timeout=30)
+        if rc2 != 0:
+            raise HTTPException(status_code=500, detail=err2 or "restart failed")
+        # Clear update state so status reflects current
+        _depin_clear_update_state(project)
+    return {"ok": True, "project": project, "updated": updated}
+
+
+def _depin_clear_update_state(project: str) -> None:
+    if not DEPIN_UPDATE_STATE.exists():
+        return
+    try:
+        state = json.loads(DEPIN_UPDATE_STATE.read_text())
+        if "projects" in state and project in state["projects"]:
+            state["projects"][project]["update_available"] = False
+        DEPIN_UPDATE_STATE.write_text(json.dumps(state, indent=2))
+    except (json.JSONDecodeError, OSError):
+        pass
+
+
+# ── GET /api/depin/auto-update ───────────────────────────────────────────────
+
+@app.get("/api/depin/auto-update")
+def api_depin_auto_update_get(_: Auth):
+    try:
+        if DEPIN_AUTO_UPDATE.exists():
+            state = json.loads(DEPIN_AUTO_UPDATE.read_text())
+            return {"projects": state}
+    except (json.JSONDecodeError, OSError):
+        pass
+    return {"projects": {}}
 
 
 # ── POST /api/depin/{project}/auto-update ─────────────────────────────────────
 
 @app.post("/api/depin/{project}/auto-update")
-def api_depin_auto_update(_: Auth, project: str):
+async def api_depin_auto_update(_: Auth, project: str, request: Request):
     _depin_validate_project(project)
-    raise HTTPException(status_code=501, detail="auto-update not yet implemented (Phase 5)")
+    body = await request.json()
+    enabled = body.get("enabled")
+    if not isinstance(enabled, bool):
+        raise HTTPException(status_code=400, detail="enabled must be a boolean")
+    try:
+        state = {}
+        if DEPIN_AUTO_UPDATE.exists():
+            state = json.loads(DEPIN_AUTO_UPDATE.read_text())
+        state[project] = enabled
+        DEPIN_AUTO_UPDATE.parent.mkdir(parents=True, exist_ok=True)
+        DEPIN_AUTO_UPDATE.write_text(json.dumps(state, indent=2))
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save auto-update state: {e}")
+    return {"ok": True, "project": project, "auto_update": enabled}
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

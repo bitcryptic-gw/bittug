@@ -1,0 +1,12 @@
+[Unit]
+Description=DePIN Docker image update check
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/gateway/scripts/depin-update-check.sh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=depin-update-check

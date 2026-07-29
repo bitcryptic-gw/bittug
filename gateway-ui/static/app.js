@@ -24,6 +24,8 @@ const state = {
 const depinState = {
   interval: null,
   uninstalling: null,
+  autoUpdate: {},
+  updating: null,
 };
 
 // ── API ───────────────────────────────────────────────────────────────────────
@@ -1754,7 +1756,11 @@ function startDepinRefresh() {
 
 async function loadDepin() {
   try {
-    const d = await api('/api/depin/status');
+    const [d, auto] = await Promise.all([
+      api('/api/depin/status'),
+      api('/api/depin/auto-update').catch(() => ({})),
+    ]);
+    depinState.autoUpdate = auto.projects || {};
     renderDepin(d);
     depinPreFill();
   } catch (e) {
@@ -1811,10 +1817,16 @@ function depinEnabledToggle(project, d) {
   </div>`;
 }
 
-function depinUpdateControls(project) {
+function depinUpdateControls(project, d) {
+  const s = d || {};
+  const hasUpdate = s.update_available === true;
+  const auto = depinState.autoUpdate ? depinState.autoUpdate[project] || false : false;
+  const updateBtn = hasUpdate
+    ? `<button class="btn btn-sm depin-update-btn" data-project="${project}">Update</button>`
+    : `<button class="btn btn-sm" disabled>Up to date</button>`;
   return `<div class="depin-update-controls">
-    <button class="btn btn-sm" disabled title="Update checking not yet available (coming in a future update)">Update</button>
-    <label class="depin-auto-check"><input type="checkbox" disabled> Auto-update</label>
+    ${updateBtn}
+    <label class="depin-auto-check"><input type="checkbox" class="depin-auto-toggle" data-project="${project}"${auto ? ' checked' : ''}> Auto-update</label>
   </div>`;
 }
 
@@ -1837,7 +1849,7 @@ function renderDepin(d) {
       statusEl.innerHTML =
         '<div class="depin-status-row">' + parts.join('') + '</div>' +
         depinHealthLine(s) +
-        depinUpdateControls(project);
+        depinUpdateControls(project, s);
     }
 
     if (configEl) {
@@ -1893,6 +1905,32 @@ async function depinToggle(project, enabled) {
   try {
     await api(`/api/depin/${project}/${action}`, 'POST');
     setTimeout(loadDepin, 1000);
+  } catch (e) {
+    if (e.message !== 'unauthorized') alert(`${project}: ${e.message}`);
+    setTimeout(loadDepin, 500);
+  }
+}
+
+async function depinUpdateProject(project) {
+  if (depinState.updating) return;
+  depinState.updating = project;
+  const btn = document.querySelector(`.depin-update-btn[data-project="${project}"]`);
+  if (btn) { btn.disabled = true; btn.textContent = 'Updating\u2026'; }
+  try {
+    await api(`/api/depin/${project}/update`, 'POST');
+    setTimeout(loadDepin, 3000);
+  } catch (e) {
+    if (e.message !== 'unauthorized') alert(`${project}: ${e.message}`);
+    setTimeout(loadDepin, 500);
+  } finally {
+    depinState.updating = null;
+  }
+}
+
+async function depinAutoUpdate(project, enabled) {
+  try {
+    await api(`/api/depin/${project}/auto-update`, 'POST', { enabled });
+    depinState.autoUpdate[project] = enabled;
   } catch (e) {
     if (e.message !== 'unauthorized') alert(`${project}: ${e.message}`);
     setTimeout(loadDepin, 500);
@@ -2169,8 +2207,15 @@ function wireEvents() {
   // DePIN — enable/disable toggles (delegated)
   document.getElementById('depin-grid').addEventListener('change', function(e) {
     const toggle = e.target.closest('.depin-toggle');
-    if (!toggle) return;
-    depinToggle(toggle.dataset.project, toggle.checked);
+    if (toggle) { depinToggle(toggle.dataset.project, toggle.checked); return; }
+    const autoToggle = e.target.closest('.depin-auto-toggle');
+    if (autoToggle) { depinAutoUpdate(autoToggle.dataset.project, autoToggle.checked); return; }
+  });
+
+  // DePIN — update buttons (delegated)
+  document.getElementById('depin-grid').addEventListener('click', function(e) {
+    const updateBtn = e.target.closest('.depin-update-btn');
+    if (updateBtn) depinUpdateProject(updateBtn.dataset.project);
   });
 }
 

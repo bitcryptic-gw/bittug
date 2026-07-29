@@ -25,6 +25,16 @@ for unit in "${UNIT_SRC_DIR}"/depin-*.service; do
     copied=$((copied + 1))
 done
 
+# DePIN timers (infrastructure, auto-enabled)
+for unit in "${UNIT_SRC_DIR}"/depin-*.timer; do
+    [ -f "$unit" ] || continue
+    name="$(basename "$unit")"
+    dst="${UNIT_DST_DIR}/${name}"
+    cp "$unit" "$dst"
+    echo "[OK] Installed ${name}"
+    systemctl enable "$name" 2>/dev/null || echo "  WARNING: Failed to enable ${name}"
+done
+
 if [ "$copied" -eq 0 ]; then
     echo "[WARN] No depin-*.service unit files found in ${UNIT_SRC_DIR} — skipping"
     exit 0
