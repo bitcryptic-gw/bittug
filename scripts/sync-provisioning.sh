@@ -213,6 +213,20 @@ else
     log "WARNING: No Docker installation detected — DePIN features unavailable"
 fi
 
+# --- DePIN unit file deployment ---
+# Installs the 4 depin-*.service files and enables the update-check timer.
+# Idempotent: safe to re-run on every OTA cycle — cp overwrite and
+# systemctl enable on already-enabled units are both no-op-safe.
+# Non-fatal: does not block the rest of provisioning on failure.
+# Does NOT enable or start the DePIN services themselves — that is
+# user-initiated via the gateway-ui toggle.
+INSTALL_DEPIN="/opt/gateway/scripts/install-depin-services.sh"
+if [ -x "$INSTALL_DEPIN" ]; then
+    bash "$INSTALL_DEPIN" || log "WARNING: install-depin-services.sh failed — DePIN unit files may not be deployed"
+else
+    log "WARNING: ${INSTALL_DEPIN} not found or not executable"
+fi
+
 # --- DePIN directories and credential durability ---
 # Creates the directory tree so EnvironmentFile= references resolve cleanly
 # at unit start time (fail-fast, not fail-later). Re-fixes ownership on
