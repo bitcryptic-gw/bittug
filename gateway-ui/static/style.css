@@ -173,11 +173,17 @@ html, body {
 }
 
 .depin-logo {
-  height: 1.75rem;
+  height: 2.5rem;
   width: auto;
-  max-width: 5rem;
+  max-width: 6rem;
   object-fit: contain;
   flex-shrink: 0;
+}
+
+.depin-logo-ur {
+  background: #eee;
+  border-radius: 4px;
+  padding: .15rem .35rem;
 }
 
 .card-body { padding: 1rem 1.1rem; }

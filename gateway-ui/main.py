@@ -108,12 +108,12 @@ DEPIN_HEALTH_PATTERNS = {
         "disconnected": re.compile(r"disconnected|connection lost|error", re.IGNORECASE),
     },
     "urnetwork": {
-        "active": re.compile(r"pool-stats|providing|connected", re.IGNORECASE),
-        "inactive": re.compile(r"error|fatal|disconnected", re.IGNORECASE),
+        "active": re.compile(r"client_id:|pool\[\d+\]", re.IGNORECASE),
+        "inactive": re.compile(r"init proxy auth failed|fatal|error", re.IGNORECASE),
     },
     "myst": {
-        "active": re.compile(r"new session|session established|serving", re.IGNORECASE),
-        "inactive": re.compile(r"error|no sessions|disconnected", re.IGNORECASE),
+        "active": re.compile(r"keepalive ping|Sending P2P message|new session|session established", re.IGNORECASE),
+        "inactive": re.compile(r"not registered|error|no sessions|disconnected", re.IGNORECASE),
     },
     "anyone": {
         "healthy": re.compile(r"\[notice\]", re.IGNORECASE),
