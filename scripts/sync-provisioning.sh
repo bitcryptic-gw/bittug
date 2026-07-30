@@ -140,6 +140,79 @@ else
     log "WARNING: ${REPO_GIT_DIR} not found — skipping .git write-access check"
 fi
 
+# --- Docker package self-heal (2026-07-30) ---
+# Detects and repairs the docker.io/docker-ce conflict on already-provisioned
+# devices where a bootstrap.sh re-run may have reinstalled docker.io over
+# docker-ce. Contract: never leaves the device worse off than it was found.
+#
+# Three states are distinguished:
+#   A. docker-ce CLI present and working → no-op (brief log only)
+#   B. docker.io installed, no docker CLI → broken state; install docker-ce,
+#      verify success, ONLY then remove docker.io
+#   C. No Docker at all → log warning, do nothing (fresh install is
+#      first-boot.sh's job)
+#
+# The ordering (install-then-verify-then-remove) is deliberate: removing
+# docker.io first and then failing the docker-ce install would leave an
+# unattended device with zero Docker at all. Installing docker-ce first and
+# verifying before removing docker.io means a failure leaves the device in
+# its original working state (docker.io with dockerd).
+#
+# Non-fatal: logs WARNING on failure, leaves device as-is, and continues
+# — the rest of provisioning must not be blocked by this.
+
+if command -v docker &>/dev/null && docker --version &>/dev/null; then
+    log "Docker CLI OK — skipping self-heal"
+
+elif dpkg -l docker.io 2>/dev/null | grep -q '^ii'; then
+    log "docker.io detected without docker-ce CLI — migrating to docker-ce"
+
+    if curl -fsSL https://get.docker.com | sh; then
+
+        if command -v docker &>/dev/null && docker --version &>/dev/null; then
+            log "docker-ce installed successfully — cleaning up docker.io"
+
+            # docker.io may already be removed by apt conflict resolution during
+            # get.docker.com (docker.io Conflicts: docker-ce). Only attempt
+            # removal if it is still present.
+            if dpkg -l docker.io 2>/dev/null | grep -q '^ii'; then
+                apt-get remove -y -qq docker.io || log "WARNING: Failed to remove docker.io"
+            else
+                log "docker.io already removed by docker-ce install"
+            fi
+
+            if command -v docker &>/dev/null && docker --version &>/dev/null; then
+                log "docker-ce CLI verified — migration complete"
+
+                GATEWAY_USER=$(stat -c '%U' /opt/gateway 2>/dev/null || echo "")
+                if [ -n "$GATEWAY_USER" ] && [ "$GATEWAY_USER" != "root" ]; then
+                    if id -nG "$GATEWAY_USER" | grep -qw docker; then
+                        log "${GATEWAY_USER} already in docker group — skipping"
+                    else
+                        usermod -aG docker "$GATEWAY_USER" && \
+                            log "Added ${GATEWAY_USER} to docker group" || \
+                            log "WARNING: Failed to add ${GATEWAY_USER} to docker group"
+                    fi
+                fi
+            else
+                log "WARNING: docker-ce CLI lost after removing docker.io — unexpected, leaving device as-is"
+            fi
+        else
+            log "WARNING: docker-ce installed but CLI verification failed — leaving docker.io in place"
+            log "WARNING: DePIN features unavailable until Docker CLI is resolved"
+        fi
+    else
+        log "WARNING: docker-ce install via get.docker.com failed — leaving docker.io in place"
+        log "WARNING: DePIN features unavailable until Docker CLI is resolved"
+    fi
+
+elif dpkg -l docker-ce 2>/dev/null | grep -q '^ii'; then
+    log "WARNING: docker-ce package present but CLI not found — configuration incomplete"
+
+else
+    log "WARNING: No Docker installation detected — DePIN features unavailable"
+fi
+
 # --- DePIN directories and credential durability ---
 # Creates the directory tree so EnvironmentFile= references resolve cleanly
 # at unit start time (fail-fast, not fail-later). Re-fixes ownership on
