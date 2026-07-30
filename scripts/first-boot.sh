@@ -133,9 +133,18 @@ if [ -n "${GPS_LATITUDE:-}" ] && [ -n "${GPS_LONGITUDE:-}" ]; then
 fi
 
 # --- Docker install ---
+# Standardized on docker-ce (Docker Inc. package, provides /usr/bin/docker CLI).
+# docker.io (Debian daemon-only package) conflicts with docker-ce and is removed
+# if detected — avoids a partial-Docker state where the daemon runs but no CLI
+# is available. See fix: 2026-07-30 standardize on docker-ce, remove docker.io conflict.
+
 if command -v docker &>/dev/null; then
     log "Docker already installed: $(docker --version)"
 else
+    if dpkg -l docker.io 2>/dev/null | grep -q '^ii'; then
+        log "docker.io detected without docker-ce CLI — removing docker.io first"
+        apt-get remove -y -qq docker.io || log "WARNING: Failed to remove docker.io"
+    fi
     log "Installing Docker (this may take 30–60 seconds on a Pi)..."
     if curl -fsSL https://get.docker.com | sh; then
         log "Docker installed successfully"

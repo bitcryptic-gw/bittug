@@ -54,6 +54,12 @@ if [ -f "$SENTINEL" ] && [ "$FORCE" = false ]; then
 fi
 
 # ── 1. System packages ────────────────────────────────────────────────────────
+#
+# Docker is NOT installed here. Docker provisioning is handled exclusively by
+# first-boot.sh via get.docker.com (docker-ce). Do not add docker.io, docker-ce,
+# or any Docker package to this script — docker.io conflicts with docker-ce and
+# re-running bootstrap.sh after first-boot.sh would silently remove the CLI.
+# See fix: 2026-07-30 standardize on docker-ce, remove docker.io conflict.
 
 echo "[firstrun] $(date '+%H:%M:%S') Starting: system packages"
 echo "--- System Packages ---"
@@ -68,11 +74,8 @@ apt-get install -y -qq --no-install-recommends \
     i2c-tools \
     jq \
     curl \
-    docker.io \
     locales-all
 
-info "Adding ${PRIMARY_USER} to docker group..."
-usermod -aG docker "$PRIMARY_USER"
 green "System packages installed"
 echo "[firstrun] $(date '+%H:%M:%S') Completed: system packages"
 
