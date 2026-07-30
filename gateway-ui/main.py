@@ -2197,9 +2197,9 @@ async def api_urnetwork_auth(_: Auth, request: Request):
 
     if not code:
         raise HTTPException(status_code=400, detail="auth_code is required")
-    if len(code) > 256:
+    if len(code) > 2048:
         raise HTTPException(status_code=400, detail="auth_code too long")
-    if SHELL_META_RE.search(code) or "\n" in code or "\r" in code:
+    if not re.fullmatch(r'[A-Za-z0-9_+/=-]+', code):
         raise HTTPException(status_code=400, detail="auth_code contains invalid characters")
 
     cmd = [
