@@ -87,6 +87,7 @@ DEPIN_DEVICE_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-]{0,63}$")
 DEPIN_NICKNAME_RE = re.compile(r"^[a-zA-Z0-9]{1,19}$")
 DEPIN_CONFIG_REQUIRED = {"honeygain", "urnetwork", "anyone"}
 DEPIN_ENV_DIR = Path("/etc/gateway-ui/depin")
+DEPIN_HEALTH_STATE_DIR = Path("/var/lib/gateway-ui")
 DEPIN_ANONRC = Path("/var/lib/gateway-ui/anyone/etc/anonrc")
 DEPIN_URNETWORK_JWT = Path("/var/lib/gateway-ui/urnetwork/jwt")
 DEPIN_UPDATE_STATE = Path("/var/lib/gateway-ui/depin-update-state.json")
@@ -2028,6 +2029,19 @@ def _depin_parse_logs(log_lines: list[str], project: str) -> tuple[str, str]:
     patterns = DEPIN_HEALTH_PATTERNS.get(project, {})
     joined = "\n".join(log_lines)
     if not joined.strip():
+        # No new log evidence — check persisted last-known-health.
+        # Projects like Honeygain are silent when healthy (no periodic
+        # log output), so empty logs are normal, not a sign of failure.
+        # Persisted state survives gateway-ui restarts and OTA cycles.
+        path = DEPIN_HEALTH_STATE_DIR / f"{project}-last-health.json"
+        if path.exists():
+            try:
+                state = json.loads(path.read_text())
+                label = state.get("health", "")
+                if label in ("connected", "active", "healthy"):
+                    return label, ""
+            except (json.JSONDecodeError, OSError):
+                pass
         return "unknown", ""
     label = "unknown"
     if project == "honeygain":
@@ -2050,6 +2064,16 @@ def _depin_parse_logs(log_lines: list[str], project: str) -> tuple[str, str]:
             label = "healthy"
         elif patterns.get("unhealthy") and patterns["unhealthy"].search(joined):
             label = "unhealthy"
+    # Persist confirmed healthy states to disk so they survive gateway-ui restarts.
+    # Unhealthy/unknown states are never persisted — a broken container will
+    # produce log evidence on the next poll, and the absence of persisted state
+    # correctly defaults back to "unknown".
+    if label in ("connected", "active", "healthy"):
+        path = DEPIN_HEALTH_STATE_DIR / f"{project}-last-health.json"
+        try:
+            path.write_text(json.dumps({"health": label}))
+        except OSError:
+            pass
     return label, joined
 
 
