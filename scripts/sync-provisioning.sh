@@ -237,6 +237,27 @@ else
     log "WARNING: ${INSTALL_DEPIN} not found or not executable"
 fi
 
+# --- Cgroup memory controller for DePIN container limits ---
+# Raspberry Pi firmware injects cgroup_disable=memory by default, which
+# silently ignores Docker --memory=<X> limits. Adds cgroup_memory=1 to
+# cmdline.txt if absent. Takes effect on next reboot only — no automatic
+# reboot is triggered here. The operator must reboot on their own schedule.
+# Idempotent: safe to re-run on every OTA cycle.
+#
+# NOTE: a reboot is required for this to take effect. DePIN containers
+# will run without memory limits until the device is rebooted.
+CMDLINE="/boot/firmware/cmdline.txt"
+if [ -f "$CMDLINE" ]; then
+    if grep -qE '(^|[[:space:]])cgroup_memory=1([[:space:]]|$)' "$CMDLINE" 2>/dev/null; then
+        log "cgroup_memory=1 present in cmdline.txt — memory limits are active if the device has been rebooted since this was added; reboot to activate if not"
+    else
+        sed -i 's/[[:space:]]*$/ cgroup_memory=1/' "$CMDLINE"
+        log "Added cgroup_memory=1 to cmdline.txt — reboot required for DePIN memory limits to take effect"
+    fi
+else
+    log "WARNING: ${CMDLINE} not found — cannot set cgroup_memory=1"
+fi
+
 # --- DePIN directories and credential durability ---
 # Creates the directory tree so EnvironmentFile= references resolve cleanly
 # at unit start time (fail-fast, not fail-later). Re-fixes ownership on

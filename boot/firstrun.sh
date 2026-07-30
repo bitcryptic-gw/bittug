@@ -165,6 +165,22 @@ if [ -f "$CMDLINE" ] && grep -q 'systemd\.run=' "$CMDLINE" 2>/dev/null; then
     echo "[firstrun] cmdline.txt cleaned"
 fi
 
+# --- Enable cgroup memory controller for DePIN container limits ---
+# Raspberry Pi firmware injects cgroup_disable=memory by default, which
+# silently drops --memory= limits on Docker containers. Re-enable it so
+# the DePIN unit files' --memory=<X> values are actually enforced.
+# Takes effect on reboot — first-boot already reboots at the end of this
+# script, so no extra reboot is needed for fresh devices.
+if [ -f "$CMDLINE" ]; then
+    if grep -qE '(^|[[:space:]])cgroup_memory=1([[:space:]]|$)' "$CMDLINE" 2>/dev/null; then
+        echo "[firstrun] cgroup_memory=1 already present in cmdline.txt"
+    else
+        echo "[firstrun] Enabling cgroup memory controller (cgroup_memory=1)"
+        sed -i 's/[[:space:]]*$/ cgroup_memory=1/' "$CMDLINE"
+        echo "[firstrun] cmdline.txt: $(cat "$CMDLINE")"
+    fi
+fi
+
 echo "[firstrun] First-run complete. Rebooting in 5s..."
 echo "=== First-Run Complete: $(date) ==="
 sleep 5
