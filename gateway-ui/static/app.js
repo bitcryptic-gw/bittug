@@ -1790,8 +1790,8 @@ function depinBadge(project, s) {
   if (!d.installed) return '<span class="badge badge-dim">Not installed</span>';
   if (!d.enabled) return '<span class="badge badge-yellow">Disabled</span>';
   if (d.service_state === 'active') {
-    const cls = d.health === 'unknown' ? 'green' : d.health === 'connected' || d.health === 'active' || d.health === 'healthy' ? 'green' : 'yellow';
-    const label = { connected: 'Connected', disconnected: 'Disconnected', active: 'Active', inactive: 'Inactive', healthy: 'Healthy', unhealthy: 'Unhealthy', unknown: 'Running' }[d.health] || 'Running';
+    const cls = d.health === 'unknown' ? 'dim' : d.health === 'connected' || d.health === 'active' || d.health === 'healthy' ? 'green' : 'yellow';
+    const label = { connected: 'Active', disconnected: 'Inactive', active: 'Active', inactive: 'Inactive', healthy: 'Active', unhealthy: 'Inactive', unknown: 'Starting' }[d.health] || 'Starting';
     return `<span class="badge badge-${cls}">${label}</span>`;
   }
   return '<span class="badge badge-red">Error</span>';
