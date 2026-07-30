@@ -173,9 +173,9 @@ html, body {
 }
 
 .depin-logo {
-  height: 2.5rem;
+  height: 3.5rem;
   width: auto;
-  max-width: 6rem;
+  max-width: 8rem;
   object-fit: contain;
   flex-shrink: 0;
 }
@@ -183,7 +183,7 @@ html, body {
 .depin-logo-ur {
   background: #eee;
   border-radius: 4px;
-  padding: .15rem .35rem;
+  padding: .2rem .4rem;
 }
 
 .card-body { padding: 1rem 1.1rem; }
