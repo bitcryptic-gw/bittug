@@ -2166,9 +2166,12 @@ def api_depin_enable(_: Auth, project: str):
     unit = _depin_service_unit(project)
     if not _service_installed(unit):
         raise HTTPException(status_code=503, detail=f"{unit} not installed — run install-depin-services.sh")
-    rc, _, err = _run(["sudo", _SYSTEMCTL, "enable", "--now", unit])
+    rc, _, err = _run(["sudo", _SYSTEMCTL, "enable", unit])
     if rc != 0:
         raise HTTPException(status_code=500, detail=err or "enable failed")
+    rc, _, err = _run(["sudo", _SYSTEMCTL, "start", unit])
+    if rc != 0:
+        raise HTTPException(status_code=500, detail=err or "start failed — unit is enabled but not running; retry to start")
     return {"ok": True, "project": project, "enabled": True}
 
 
@@ -2178,9 +2181,12 @@ def api_depin_enable(_: Auth, project: str):
 def api_depin_disable(_: Auth, project: str):
     _depin_validate_project(project)
     unit = _depin_service_unit(project)
-    rc, _, err = _run(["sudo", _SYSTEMCTL, "disable", "--now", unit])
+    rc, _, err = _run(["sudo", _SYSTEMCTL, "stop", unit])
     if rc != 0:
-        raise HTTPException(status_code=500, detail=err or "disable failed")
+        raise HTTPException(status_code=500, detail=err or "stop failed")
+    rc, _, err = _run(["sudo", _SYSTEMCTL, "disable", unit])
+    if rc != 0:
+        raise HTTPException(status_code=500, detail=err or "disable failed — unit is stopped but still enabled; retry to disable")
     return {"ok": True, "project": project, "enabled": False}
 
 
