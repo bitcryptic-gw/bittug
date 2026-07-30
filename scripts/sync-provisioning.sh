@@ -220,9 +220,19 @@ fi
 # Non-fatal: does not block the rest of provisioning on failure.
 # Does NOT enable or start the DePIN services themselves — that is
 # user-initiated via the gateway-ui toggle.
+#
+# NOTE: any new bash <script> invocation in this file that needs root
+# must use `bash -p` — plain `bash` drops the privileged effective UID
+# back to the real UID (gateway-ui) whenever they differ. This exact
+# bug has hit this project 3 times now (OTA wrapper, apply-hostname/
+# apply-timezone, and here). Don't repeat it a 4th time.
 INSTALL_DEPIN="/opt/gateway/scripts/install-depin-services.sh"
 if [ -x "$INSTALL_DEPIN" ]; then
-    bash "$INSTALL_DEPIN" || log "WARNING: install-depin-services.sh failed — DePIN unit files may not be deployed"
+    bash -p "$INSTALL_DEPIN"
+    rc=$?
+    if [ $rc -ne 0 ]; then
+        log "WARNING: install-depin-services.sh failed (exit ${rc}) — DePIN unit files may not be deployed"
+    fi
 else
     log "WARNING: ${INSTALL_DEPIN} not found or not executable"
 fi
