@@ -2123,7 +2123,7 @@ async def api_depin_configure(_: Auth, project: str, request: Request):
         if "\n" in password or "\r" in password:
             raise HTTPException(status_code=400, detail="password contains newlines")
 
-        rc, out, err = _run(["sudo", DEPIN_WRAPPER, "honeygain", device_name, email, password], timeout=15)
+        rc, out, err = await _run_async([DEPIN_WRAPPER, "honeygain", device_name, email, password], timeout=15)
 
     elif project == "anyone":
         nickname = str(body.get("nickname", "")).strip()
@@ -2145,10 +2145,10 @@ async def api_depin_configure(_: Auth, project: str, request: Request):
         if myfamily and SHELL_META_RE.search(myfamily):
             raise HTTPException(status_code=400, detail="myfamily contains invalid characters")
 
-        args = ["sudo", DEPIN_WRAPPER, "anyone", nickname, contact]
+        args = [DEPIN_WRAPPER, "anyone", nickname, contact]
         if myfamily:
             args.append(myfamily)
-        rc, out, err = _run(args, timeout=15)
+        rc, out, err = await _run_async(args, timeout=15)
 
     if rc != 0:
         detail = (err or out).strip() or "config write failed"

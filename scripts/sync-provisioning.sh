@@ -54,32 +54,35 @@ if [ -f /etc/gateway-ui/github-token ]; then
 fi
 
 # --- sudoers deployment ---
-cat > /etc/sudoers.d/10-gateway-ui << 'SUDOERS'
+# Writes to a temp file first, validates with visudo, and only replaces
+# the live file if validation passes. On failure, preserves the previous
+# file and warns non-fatally — the rest of provisioning continues.
+SUDOERS_TMP=$(mktemp /tmp/10-gateway-ui.XXXXXX)
+cat > "$SUDOERS_TMP" << 'SUDOERS'
 gateway-ui ALL=(root) NOPASSWD: /bin/systemctl restart gateway-ui
 gateway-ui ALL=(root) NOPASSWD: /bin/systemctl restart pktfwd
 gateway-ui ALL=(root) NOPASSWD: /bin/systemctl restart gateway-rs
 gateway-ui ALL=(root) NOPASSWD: /opt/gateway/scripts/apply-band.sh
 gateway-ui ALL=(root) NOPASSWD: /opt/gateway/scripts/apply-timezone.sh
 gateway-ui ALL=(root) NOPASSWD: /opt/gateway/scripts/apply-hostname.sh
-gateway-ui ALL=(root) NOPASSWD: /usr/local/bin/depin-config-wrapper
 gateway-ui ALL=(root) NOPASSWD: /opt/gateway/scripts/depin-uninstall.sh
 gateway-ui ALL=(root) NOPASSWD: /bin/systemctl enable depin-*.service
 gateway-ui ALL=(root) NOPASSWD: /bin/systemctl disable depin-*.service
 gateway-ui ALL=(root) NOPASSWD: /bin/systemctl start depin-*.service
 gateway-ui ALL=(root) NOPASSWD: /bin/systemctl stop depin-*.service
 gateway-ui ALL=(root) NOPASSWD: /bin/systemctl restart depin-*.service
-gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker pull honeygain/honeygain:latest
-gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker pull bringyour/community-provider:g4-latest
-gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker pull mysteriumnetwork/myst:latest
-gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker pull ghcr.io/anyone-protocol/ator-protocol:latest
+gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker pull honeygain/honeygain\:latest
+gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker pull bringyour/community-provider\:g4-latest
+gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker pull mysteriumnetwork/myst\:latest
+gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker pull ghcr.io/anyone-protocol/ator-protocol\:latest
 SUDOERS
-chmod 0440 /etc/sudoers.d/10-gateway-ui
-if visudo -c -f /etc/sudoers.d/10-gateway-ui; then
+chmod 0440 "$SUDOERS_TMP"
+if visudo -c -f "$SUDOERS_TMP"; then
+    mv "$SUDOERS_TMP" /etc/sudoers.d/10-gateway-ui
     log "Sudoers entries installed and validated"
 else
-    log "ERROR: sudoers validation failed — removing /etc/sudoers.d/10-gateway-ui"
-    rm -f /etc/sudoers.d/10-gateway-ui
-    exit 1
+    log "WARNING: sudoers validation failed — preserving previous file untouched"
+    rm -f "$SUDOERS_TMP"
 fi
 
 # --- gateway-rs settings.toml ---
