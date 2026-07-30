@@ -173,8 +173,9 @@ html, body {
 }
 
 .depin-logo {
-  width: 1.2rem;
-  height: 1.2rem;
+  height: 1.75rem;
+  width: auto;
+  max-width: 5rem;
   object-fit: contain;
   flex-shrink: 0;
 }
