@@ -1830,6 +1830,31 @@ function depinUpdateControls(project, d) {
   </div>`;
 }
 
+function depinMystNodeUI(d, hostname) {
+  const s = d || {};
+  if (!s.enabled || !hostname) return '';
+  const url = `http://${hostname}:4449`;
+  if (s.health === 'active') {
+    return `<div class="depin-myst-link dim mt" style="font-size:.85rem">
+      NodeUI: <a href="${url}" target="_blank" rel="noopener">${url}</a>
+    </div>`;
+  }
+  return `<div class="depin-myst-link mt">
+    <a href="${url}" target="_blank" rel="noopener">Open Mysterium NodeUI →</a>
+    <span class="dim" style="font-size:.85rem"> — connect and claim this node to start earning</span>
+  </div>`;
+}
+
+function depinMystPortForward(d) {
+  const s = d || {};
+  if (!s.installed || !s.enabled) return '';
+  return `<div class="depin-info mt">
+    <strong>Port forwarding required:</strong> For full network participation and earnings,
+    forward <strong>UDP ports 56000–56100</strong> on your router to this device.
+    Without this, the node may run but with limited peer connectivity.
+  </div>`;
+}
+
 function renderDepin(d) {
   const projects = d.projects || {};
   const names = {
@@ -1849,6 +1874,8 @@ function renderDepin(d) {
       statusEl.innerHTML =
         '<div class="depin-status-row">' + parts.join('') + '</div>' +
         depinHealthLine(s) +
+        (project === 'myst' ? depinMystNodeUI(s, d.hostname) : '') +
+        (project === 'myst' ? depinMystPortForward(s) : '') +
         depinUpdateControls(project, s);
     }
 

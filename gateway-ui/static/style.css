@@ -952,3 +952,13 @@ code.addr {
 .depin-warning strong {
   color: var(--text);
 }
+
+.depin-info {
+  background: rgba(100,140,220,.07);
+  border: 1px solid rgba(100,140,220,.18);
+  border-radius: var(--radius);
+  padding: .5rem .7rem;
+  font-size: .8rem;
+  line-height: 1.5;
+  color: var(--dim);
+}

@@ -631,6 +631,24 @@ def _tailscale_hostname() -> str | None:
     return dns_name[:dot_idx] if dot_idx != -1 else dns_name
 
 
+def _tailscale_fqdn() -> str | None:
+    """Return the full Tailscale DNS name (e.g. sensecap-8397f8.myth-nessie.ts.net)."""
+    if not Path(_TAILSCALE).exists():
+        return None
+    rc, out, _ = _run([_TAILSCALE, "status", "--json"])
+    if rc != 0:
+        return None
+    try:
+        data = json.loads(out)
+    except (json.JSONDecodeError, OSError):
+        return None
+    self_info = data.get("Self", {})
+    if not isinstance(self_info, dict):
+        return None
+    dns_name = self_info.get("DNSName", "").rstrip(".")
+    return dns_name or None
+
+
 @app.get("/api/hostname")
 def api_get_hostname(_: Auth):
     return {
@@ -2080,7 +2098,10 @@ def _depin_check_config(project: str) -> None:
 
 @app.get("/api/depin/status")
 def api_depin_status(_: Auth):
-    return {"projects": {p: _depin_project_status(p) for p in DEPIN_PROJECTS}}
+    return {
+        "hostname": _tailscale_fqdn() or _tailscale_hostname() or socket.gethostname(),
+        "projects": {p: _depin_project_status(p) for p in DEPIN_PROJECTS}
+    }
 
 
 # ── POST /api/depin/{project}/configure ──────────────────────────────────────
