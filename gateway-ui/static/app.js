@@ -1837,6 +1837,7 @@ function depinMystNodeUI(d, hostname) {
   if (s.health === 'active') {
     return `<div class="depin-myst-link dim mt" style="font-size:.85rem">
       NodeUI: <a href="${url}" target="_blank" rel="noopener">${url}</a>
+      <span class="dim"> — monitor / manage your node</span>
     </div>`;
   }
   return `<div class="depin-myst-link mt">
@@ -1849,9 +1850,10 @@ function depinMystPortForward(d) {
   const s = d || {};
   if (!s.installed || !s.enabled) return '';
   return `<div class="depin-info mt">
-    <strong>Port forwarding required:</strong> For full network participation and earnings,
-    forward <strong>UDP ports 56000–56100</strong> on your router to this device.
-    Without this, the node may run but with limited peer connectivity.
+    <strong>NAT tip:</strong> Check your NAT type in the Mysterium NodeUI (linked above).
+    Most routers with Moderate NAT work fine without changes. If your status shows
+    Strict or Symmetric NAT, forward <strong>UDP ports 56000–56100</strong> on your
+    router to this device for full peer connectivity.
   </div>`;
 }
 
