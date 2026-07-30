@@ -1929,6 +1929,26 @@ async function depinConfigure(project) {
   }
 }
 
+async function depinUrnetworkAuth() {
+  const el = document.getElementById('depin-result-urnetwork-auth');
+  const btn = document.querySelector('.depin-urn-auth-btn');
+  const code = document.getElementById('ur-auth-code').value.trim();
+  if (!code) { showResult('depin-result-urnetwork-auth', 'Auth code is required', true); return; }
+  try {
+    btn.disabled = true;
+    btn.textContent = 'Authenticating…';
+    await api('/api/depin/urnetwork/auth', 'POST', { auth_code: code });
+    showResult('depin-result-urnetwork-auth', 'Authentication successful — JWT saved. You can now enable URnetwork.', false);
+    document.getElementById('ur-auth-code').value = '';
+    setTimeout(loadDepin, 500);
+  } catch (e) {
+    if (e.message !== 'unauthorized') showResult('depin-result-urnetwork-auth', e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Authenticate';
+  }
+}
+
 async function depinToggle(project, enabled) {
   const action = enabled ? 'enable' : 'disable';
   try {
@@ -2216,6 +2236,8 @@ function wireEvents() {
 
   // DePIN — configure buttons (delegated)
   document.getElementById('depin-grid').addEventListener('click', function(e) {
+    const authBtn = e.target.closest('.depin-urn-auth-btn');
+    if (authBtn) { depinUrnetworkAuth(); return; }
     const btn = e.target.closest('.depin-configure-btn');
     if (btn) { depinConfigure(btn.dataset.project); return; }
     const uninstallBtn = e.target.closest('.depin-uninstall-btn');

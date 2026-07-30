@@ -75,6 +75,7 @@ gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker pull honeygain/honeygain\:latest
 gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker pull bringyour/community-provider\:g4-latest
 gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker pull mysteriumnetwork/myst\:latest
 gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker pull ghcr.io/anyone-protocol/ator-protocol\:latest
+gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker run --rm -v /var/lib/gateway-ui/urnetwork\:/root/.urnetwork bringyour/community-provider\:g4-latest auth * -f
 SUDOERS
 chmod 0440 "$SUDOERS_TMP"
 if visudo -c -f "$SUDOERS_TMP"; then

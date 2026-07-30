@@ -85,9 +85,10 @@ DEPIN_PROJECTS = ["honeygain", "urnetwork", "myst", "anyone"]
 DEPIN_PROJECT_RE = re.compile(r"^(honeygain|urnetwork|myst|anyone)$")
 DEPIN_DEVICE_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-]{0,63}$")
 DEPIN_NICKNAME_RE = re.compile(r"^[a-zA-Z0-9]{1,19}$")
-DEPIN_CONFIG_REQUIRED = {"honeygain", "anyone"}
+DEPIN_CONFIG_REQUIRED = {"honeygain", "urnetwork", "anyone"}
 DEPIN_ENV_DIR = Path("/etc/gateway-ui/depin")
 DEPIN_ANONRC = Path("/var/lib/gateway-ui/anyone/etc/anonrc")
+DEPIN_URNETWORK_JWT = Path("/var/lib/gateway-ui/urnetwork/jwt")
 DEPIN_UPDATE_STATE = Path("/var/lib/gateway-ui/depin-update-state.json")
 DEPIN_AUTO_UPDATE = Path("/var/lib/gateway-ui/depin-auto-update.json")
 DEPIN_NOTIFY_PENDING = Path("/var/lib/gateway-ui/depin-notify-pending")
@@ -2011,6 +2012,8 @@ def _depin_is_configured(project: str) -> bool:
         return True
     if project == "honeygain":
         return (DEPIN_ENV_DIR / "honeygain.env").exists()
+    if project == "urnetwork":
+        return DEPIN_URNETWORK_JWT.exists()
     if project == "anyone":
         return DEPIN_ANONRC.exists()
     return False
@@ -2090,7 +2093,10 @@ def _depin_update_available(project: str) -> bool:
 
 def _depin_check_config(project: str) -> None:
     if project in DEPIN_CONFIG_REQUIRED and not _depin_is_configured(project):
-        detail = f"{project} requires configuration before being enabled — call /api/depin/{project}/configure first"
+        if project == "urnetwork":
+            detail = "URnetwork requires authentication before being enabled — enter an auth code from ur.io first"
+        else:
+            detail = f"{project} requires configuration before being enabled — call /api/depin/{project}/configure first"
         raise HTTPException(status_code=409, detail=detail)
 
 
@@ -2176,6 +2182,39 @@ async def api_depin_configure(_: Auth, project: str, request: Request):
         raise HTTPException(status_code=500, detail=detail)
 
     return {"ok": True, "project": project, "configured": _depin_is_configured(project)}
+
+
+# ── POST /api/depin/urnetwork/auth ──────────────────────────────────────────
+
+URNETWORK_AUTH_IMAGE = "bringyour/community-provider:g4-latest"
+URNETWORK_AUTH_VOLUME = "/var/lib/gateway-ui/urnetwork"
+
+
+@app.post("/api/depin/urnetwork/auth")
+async def api_urnetwork_auth(_: Auth, request: Request):
+    body = await request.json()
+    code = str(body.get("auth_code", "")).strip()
+
+    if not code:
+        raise HTTPException(status_code=400, detail="auth_code is required")
+    if len(code) > 256:
+        raise HTTPException(status_code=400, detail="auth_code too long")
+    if SHELL_META_RE.search(code) or "\n" in code or "\r" in code:
+        raise HTTPException(status_code=400, detail="auth_code contains invalid characters")
+
+    cmd = [
+        "sudo", "/usr/bin/docker", "run", "--rm",
+        "-v", f"{URNETWORK_AUTH_VOLUME}:/root/.urnetwork",
+        URNETWORK_AUTH_IMAGE,
+        "auth", code, "-f",
+    ]
+    rc, out, err = await _run_async(cmd, timeout=30)
+
+    if rc != 0:
+        detail = (err or out).strip() or "auth failed"
+        raise HTTPException(status_code=500, detail=detail)
+
+    return {"ok": True, "output": (out + err).strip()}
 
 
 # ── POST /api/depin/{project}/enable ─────────────────────────────────────────

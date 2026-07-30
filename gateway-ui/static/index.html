@@ -225,7 +225,21 @@
             <div class="spinner"></div>
           </div>
           <div class="card-body depin-config-body hidden" data-project="urnetwork">
-            <p class="dim" style="font-size:.85rem">No configuration needed — identity is generated automatically on first run.</p>
+            <p class="dim" style="font-size:.85rem">
+              <strong>One-time setup:</strong> Before enabling URnetwork, you must
+              authenticate with an auth code from your account.
+              <a href="https://ur.io/?auth" target="_blank" rel="noopener">Log in to ur.io</a>
+              and click "Copy an Auth Code", then paste it below.
+            </p>
+            <div class="field-group mt">
+              <label class="field-label" for="ur-auth-code">Auth code</label>
+              <input type="text" id="ur-auth-code" class="wingbits-input" placeholder="Paste your auth code here" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="action-row mt">
+              <button class="btn btn-primary depin-urn-auth-btn">Authenticate</button>
+              <span class="result-msg" id="depin-result-urnetwork-auth"></span>
+            </div>
+            <p class="dim mt" style="font-size:.73rem">Your auth code is single-use and short-lived, but is briefly visible to anyone with administrative access to this device while authentication runs.</p>
           </div>
           <div class="depin-uninstall-section" id="depin-uninstall-urnetwork">
             <button class="btn btn-danger btn-sm depin-uninstall-btn" data-project="urnetwork">Full Uninstall</button>
