@@ -1894,7 +1894,8 @@ def _depin_check_notifications() -> None:
         return
     try:
         DEPIN_NOTIFY_PENDING.unlink()
-    except OSError:
+    except OSError as e:
+        logging.warning("Failed to unlink %s: %s", DEPIN_NOTIFY_PENDING, e)
         return
 
     state = {}
@@ -2072,7 +2073,8 @@ def _depin_parse_logs(log_lines: list[str], project: str) -> tuple[str, str]:
         path = DEPIN_HEALTH_STATE_DIR / f"{project}-last-health.json"
         try:
             path.write_text(json.dumps({"health": label}))
-        except OSError:
+        except OSError as e:
+            logging.warning("Failed to write %s: %s", path, e)
             pass
     return label, joined
 
@@ -2323,8 +2325,10 @@ def _depin_clear_update_state(project: str) -> None:
         if "projects" in state and project in state["projects"]:
             state["projects"][project]["update_available"] = False
         DEPIN_UPDATE_STATE.write_text(json.dumps(state, indent=2))
-    except (json.JSONDecodeError, OSError):
+    except json.JSONDecodeError:
         pass
+    except OSError as e:
+        logging.warning("Failed to write %s: %s", DEPIN_UPDATE_STATE, e)
 
 
 # ── GET /api/depin/auto-update ───────────────────────────────────────────────
@@ -2357,6 +2361,7 @@ async def api_depin_auto_update(_: Auth, project: str, request: Request):
         DEPIN_AUTO_UPDATE.parent.mkdir(parents=True, exist_ok=True)
         DEPIN_AUTO_UPDATE.write_text(json.dumps(state, indent=2))
     except OSError as e:
+        logging.warning("Failed to write %s: %s", DEPIN_AUTO_UPDATE, e)
         raise HTTPException(status_code=500, detail=f"Failed to save auto-update state: {e}")
     return {"ok": True, "project": project, "auto_update": enabled}
 

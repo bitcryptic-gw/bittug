@@ -16,6 +16,8 @@ declare -A IMAGES=(
 )
 
 mkdir -p /var/lib/gateway-ui
+chown root:gateway-ui /var/lib/gateway-ui 2>/dev/null || true
+chmod 2775 /var/lib/gateway-ui 2>/dev/null || true
 
 # ── Load current state ───────────────────────────────────────────────────────
 prev_state=$(load_state)

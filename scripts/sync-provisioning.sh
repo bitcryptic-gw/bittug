@@ -259,6 +259,30 @@ else
     log "WARNING: ${CMDLINE} not found — cannot set cgroup_memory=1"
 fi
 
+# --- /var/lib/gateway-ui/ base directory durability ---
+# This directory must accept writes from gateway-ui:gateway-ui for:
+#   depin-auto-update.json, depin-update-state.json, depin-notify-pending,
+#   and {project}-last-health.json.
+# setgid so files created by either root-context scripts or the gateway-ui
+# Python process inherit the gateway-ui group.
+# Non-recursive — anyone/ and urnetwork/ subdirs keep root:root.
+GATEWAY_LIB="/var/lib/gateway-ui"
+if [ -d "$GATEWAY_LIB" ]; then
+    cur_mode=$(stat -c '%a' "$GATEWAY_LIB" 2>/dev/null || true)
+    cur_owner=$(stat -c '%U:%G' "$GATEWAY_LIB" 2>/dev/null || true)
+    if [ "$cur_owner" != "root:gateway-ui" ] || [ "$cur_mode" != "2775" ]; then
+        chown root:gateway-ui "$GATEWAY_LIB" && \
+            chmod 2775 "$GATEWAY_LIB" && \
+            log "Corrected ${GATEWAY_LIB} ownership to root:gateway-ui 2775 (was ${cur_owner} ${cur_mode})" || \
+            log "WARNING: Failed to chown ${GATEWAY_LIB}"
+    fi
+else
+    mkdir -p "$GATEWAY_LIB"
+    chown root:gateway-ui "$GATEWAY_LIB"
+    chmod 2775 "$GATEWAY_LIB"
+    log "Created ${GATEWAY_LIB} (root:gateway-ui 2775)"
+fi
+
 # --- DePIN directories and credential durability ---
 # Creates the directory tree so EnvironmentFile= references resolve cleanly
 # at unit start time (fail-fast, not fail-later). Re-fixes ownership on

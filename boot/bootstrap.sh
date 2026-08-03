@@ -110,6 +110,15 @@ git config --system --add safe.directory /opt/gateway
 green "Git safe.directory set for /opt/gateway"
 echo "[firstrun] $(date '+%H:%M:%S') Completed: repo clone"
 
+# Create /var/lib/gateway-ui/ with group-write for the gateway-ui service.
+# setgid (2775) ensures files created by either root-context scripts or the
+# gateway-ui Python process inherit the gateway-ui group.
+# Non-recursive — anyone/ and urnetwork/ subdirectories get their own
+# ownership from sync-provisioning.sh (anyone/) or Docker bind-mounts
+# (urnetwork/) and must remain root:root.
+install -d -m 2775 -o root -g gateway-ui /var/lib/gateway-ui
+green "Created /var/lib/gateway-ui (root:gateway-ui 2775)"
+
 # ── 3. Timezone ──────────────────────────────────────────────────────────────
 
 echo ""
