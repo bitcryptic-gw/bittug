@@ -236,7 +236,7 @@ int main(int argc, char *argv[]) {
     if (setegid(0) != 0)
         die("setegid(0)", "tag fetch privilege restore");
 
-    /* Capture version string (defer disk write until we know overall success) */
+    /* Capture version string */
     char version[256] = "unknown";
     if (seteuid(repo_owner) != 0)
         die("seteuid(repo_owner)", "git describe privilege drop");
@@ -258,6 +258,22 @@ int main(int argc, char *argv[]) {
         version[sizeof(version) - 1] = '\0';
     } else {
         fprintf(stderr, "WARNING: git describe failed (exit %d) — /etc/gateway-version not updated\n", describe_rc);
+    }
+
+    /* Write version file immediately — before provisioning, wrapper
+       recompilation, or service restarts.  The browser's SSE-disconnect
+       reload fires at T+5s from gateway-ui restart; if we defer this
+       write until after the restart + 15s health-poll, the freshly
+       reloaded page sees the old version for up to an hour. */
+    {
+        FILE *vf = fopen("/etc/gateway-version", "w");
+        if (vf) {
+            fprintf(vf, "%s\n", version);
+            fclose(vf);
+        } else {
+            fprintf(stderr, "WARNING: cannot write /etc/gateway-version: %s\n", strerror(errno));
+        }
+        printf("VERSION:%s\n", version);
     }
 
     /* ── Recompile all setuid wrappers ──────────────────────────────────────── */
@@ -355,21 +371,10 @@ int main(int argc, char *argv[]) {
     /* Overall success: wrappers compiled AND all service restarts succeeded */
     int overall_ok = (wrapper_rc == 0 && !restart_failed);
 
-    if (overall_ok) {
-        FILE *vf = fopen("/etc/gateway-version", "w");
-        if (vf) {
-            fprintf(vf, "%s\n", version);
-            fclose(vf);
-        } else {
-            fprintf(stderr, "WARNING: cannot write /etc/gateway-version: %s\n", strerror(errno));
-        }
-        printf("VERSION:%s\n", version);
-    } else {
-        if (wrapper_rc != 0)
-            fprintf(stderr, "ERROR: wrapper recompilation failed (exit %d)\n", wrapper_rc);
-        if (restart_failed)
-            fprintf(stderr, "ERROR: one or more service restarts failed\n");
-    }
+    if (wrapper_rc != 0)
+        fprintf(stderr, "ERROR: wrapper recompilation failed (exit %d)\n", wrapper_rc);
+    if (restart_failed)
+        fprintf(stderr, "ERROR: one or more service restarts failed\n");
 
     return overall_ok ? 0 : 1;
 }
