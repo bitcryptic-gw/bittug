@@ -70,7 +70,7 @@ int main(int argc, char *argv[]) {
        Failure is still distinguishable: docker returns a non-zero exit code
        on error, and this wrapper's own pre-exec failures are reported on
        stderr before the merge, so error-vs-empty-output is not conflated. */
-    if (dup2(STDOUT_FILENO, STDERR_FILENO) != STDOUT_FILENO)
+    if (dup2(STDOUT_FILENO, STDERR_FILENO) != STDERR_FILENO)
         die("failed to merge stderr into stdout");
 
     /* Fixed argv, absolute binary path, no shell, no interpolation, no
