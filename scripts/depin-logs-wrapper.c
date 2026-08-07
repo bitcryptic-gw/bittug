@@ -63,6 +63,16 @@ int main(int argc, char *argv[]) {
     if (setgroups(0, NULL) != 0 || setegid(0) != 0 || seteuid(0) != 0)
         die("failed to acquire root privileges");
 
+    /* docker logs proxies the container's streams separately — Honeygain
+       writes to its own stderr, so the log content arrives on this wrapper's
+       stderr, not stdout. Merge stderr into stdout before exec so main.py's
+       health check (which reads stdout only) always sees the log content.
+       Failure is still distinguishable: docker returns a non-zero exit code
+       on error, and this wrapper's own pre-exec failures are reported on
+       stderr before the merge, so error-vs-empty-output is not conflated. */
+    if (dup2(STDOUT_FILENO, STDERR_FILENO) != STDOUT_FILENO)
+        die("failed to merge stderr into stdout");
+
     /* Fixed argv, absolute binary path, no shell, no interpolation, no
        PATH or environment trust. */
     char *docker_argv[] = {
@@ -70,6 +80,8 @@ int main(int argc, char *argv[]) {
     };
     execv(DOCKER_BIN, docker_argv);
 
+    /* Post-merge: this lands on the (shared) stdout stream, but the exit
+       code of 1 is what signals failure to the caller. */
     fprintf(stderr, "ERROR: execv %s failed: %s\n", DOCKER_BIN, strerror(errno));
     return 1;
 }
