@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <sys/types.h>
 #include <pwd.h>
+#include <grp.h>
 
 #define DOCKER_BIN "/usr/bin/docker"
 /* Must stay in sync with DEPIN_LOG_LINES in gateway-ui/main.py (50). */
