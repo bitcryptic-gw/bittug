@@ -2087,10 +2087,19 @@ def _depin_project_status(project: str) -> dict:
     if installed:
         rc, out, _ = _run(["systemctl", "is-enabled", unit])
         enabled = (rc == 0 and out.strip() == "enabled")
-    log_rc, log_out, _ = _run(
-        ["journalctl", "-u", unit, "-n", str(DEPIN_LOG_LINES), "--no-pager", "--output=cat"],
-        timeout=10,
-    )
+    if project == "honeygain":
+        # Honeygain's output goes through Docker's json-file log driver, not
+        # journald — the unit journal is permanently empty. Read docker logs
+        # via the setuid depin-logs-wrapper (gateway-ui has no docker access).
+        log_rc, log_out, _ = _run(
+            ["/usr/local/bin/depin-logs-wrapper", project],
+            timeout=10,
+        )
+    else:
+        log_rc, log_out, _ = _run(
+            ["journalctl", "-u", unit, "-n", str(DEPIN_LOG_LINES), "--no-pager", "--output=cat"],
+            timeout=10,
+        )
     log_lines = log_out.splitlines() if log_rc == 0 else []
     health_label, raw_logs = _depin_parse_logs(log_lines, project)
     return {
