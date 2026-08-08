@@ -168,7 +168,7 @@ if command -v docker &>/dev/null && docker --version &>/dev/null; then
 elif dpkg -l docker.io 2>/dev/null | grep -q '^ii'; then
     log "docker.io detected without docker-ce CLI — migrating to docker-ce"
 
-    if curl -fsSL https://get.docker.com | sh; then
+    if curl -fsSL https://get.docker.com | bash -p; then
 
         if command -v docker &>/dev/null && docker --version &>/dev/null; then
             log "docker-ce installed successfully — cleaning up docker.io"
