@@ -2180,10 +2180,8 @@ async def api_depin_configure(_: Auth, project: str, request: Request):
             raise HTTPException(status_code=400, detail="device_name must be alphanumeric and hyphens only")
         if "@" not in email or "." not in email.split("@")[-1] if "@" in email else True:
             raise HTTPException(status_code=400, detail="invalid email format")
-        if SHELL_META_RE.search(password):
-            raise HTTPException(status_code=400, detail="password contains invalid characters")
-        if "\n" in password or "\r" in password:
-            raise HTTPException(status_code=400, detail="password contains newlines")
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7f for ch in password):
+            raise HTTPException(status_code=400, detail="password contains control characters")
 
         rc, out, err = await _run_async([DEPIN_WRAPPER, "honeygain", device_name, email, password], timeout=15)
 
