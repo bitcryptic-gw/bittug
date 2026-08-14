@@ -816,6 +816,14 @@ def api_wingbits(_: Auth):
     return {"readsb": readsb_info, "wingbits": wingbits_info}
 
 
+@app.get("/api/wingbits/stats")
+def api_wingbits_stats(_: Auth):
+    return {
+        "aircraft_count":   _aircraft_tracked_count(),
+        "satellites_count": _satellites_in_view_count(),
+    }
+
+
 def _parse_wingbits_cmd(cmd: str) -> tuple[str, str]:
     if not cmd:
         raise HTTPException(status_code=400, detail="Install command is required")

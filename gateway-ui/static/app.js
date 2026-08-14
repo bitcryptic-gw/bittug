@@ -534,6 +534,34 @@ function clearWingbitsOutput() {
   document.getElementById('wingbits-output-actions').classList.add('hidden');
 }
 
+async function refreshLiveStats() {
+  const btn = document.getElementById('btn-livestats-refresh');
+  const aircraftEl = document.getElementById('livestats-aircraft');
+  const satellitesEl = document.getElementById('livestats-satellites');
+  const msg = document.getElementById('livestats-refresh-msg');
+
+  btn.disabled = true;
+  aircraftEl.classList.add('dim');
+  satellitesEl.classList.add('dim');
+
+  try {
+    const d = await api('/api/wingbits/stats');
+    aircraftEl.textContent = d.aircraft_count;
+    satellitesEl.textContent = d.satellites_count;
+    msg.textContent = '';
+    msg.className = 'result-msg';
+  } catch (e) {
+    if (e.message !== 'unauthorized') {
+      msg.textContent = 'Refresh failed';
+      msg.className = 'result-msg result-error';
+    }
+  } finally {
+    btn.disabled = false;
+    aircraftEl.classList.remove('dim');
+    satellitesEl.classList.remove('dim');
+  }
+}
+
 // ── System Info ──────────────────────────────────────────────────────────────
 
 function renderSysinfo(d, showHostname) {
@@ -2104,6 +2132,7 @@ function wireEvents() {
   document.getElementById('wingbits-cmd').addEventListener('input', _wingbitsUpdateBtn);
   document.getElementById('btn-wingbits-run').addEventListener('click', runWingbitsSetup);
   document.getElementById('btn-wingbits-clear').addEventListener('click', clearWingbitsOutput);
+  document.getElementById('btn-livestats-refresh').addEventListener('click', refreshLiveStats);
 
   // Network — Tailscale auth
   document.getElementById('tailscale-key').addEventListener('input', _tsKeyUpdateBtn);

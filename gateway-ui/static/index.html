@@ -168,14 +168,15 @@
           <div class="card-body">
             <div class="kv-row">
               <span class="kv-label">Aircraft tracked</span>
-              <span class="kv-value">{{ aircraft_count }}</span>
+              <span class="kv-value" id="livestats-aircraft">{{ aircraft_count }}</span>
             </div>
             <div class="kv-row">
               <span class="kv-label">Satellites in view</span>
-              <span class="kv-value">{{ satellites_count }}</span>
+              <span class="kv-value" id="livestats-satellites">{{ satellites_count }}</span>
             </div>
             <div class="action-row">
-              <a href="/" class="btn btn-sm">Refresh</a>
+              <button id="btn-livestats-refresh" class="btn btn-sm">Refresh</button>
+              <span id="livestats-refresh-msg" class="result-msg"></span>
             </div>
           </div>
         </div>
