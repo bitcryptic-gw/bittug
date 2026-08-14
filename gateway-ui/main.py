@@ -201,10 +201,28 @@ Auth = Annotated[None, Depends(_require_auth)]
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
+# tar1090 map — served on a fixed path/port across deployments (Wingbits
+# installs readsb + tar1090 via wiedehopf's scripts; host is the only
+# variable part, derived from the request context).
+TAR1090_PATH = "/tar1090/"
+TAR1090_HOST_RE = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*$"
+)
+
+
+def _tar1090_url(request: Request) -> str:
+    host = (request.url.hostname or "").strip().rstrip(".")
+    if not host or len(host) > 253 or not TAR1090_HOST_RE.fullmatch(host):
+        return "#"
+    return f"http://{host}{TAR1090_PATH}"
+
+
 @app.get("/", include_in_schema=False)
-def index():
+def index(request: Request):
     html = (STATIC_DIR / "index.html").read_text()
     html = html.replace("{{ version }}", GATEWAY_VERSION)
+    html = html.replace("{{ tar1090_url }}", _tar1090_url(request))
     return HTMLResponse(html)
 
 
