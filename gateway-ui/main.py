@@ -218,11 +218,79 @@ def _tar1090_url(request: Request) -> str:
     return f"http://{host}{TAR1090_PATH}"
 
 
+# Wingbits dashboard — per-station URL. The Wingbits install (download.sh)
+# writes the station/device ID to /etc/wingbits/device, and its completion
+# message links to https://wingbits.com/dashboard/stations/<device_id>. The
+# formats accepted are the ones Wingbits' own debug.sh validates: animal-name
+# words, an 18-char uppercase hex serial, or a UUID. Missing/unregistered ->
+# inert "#". "not-wingbits-device" is the display sentinel wb-config uses when
+# no device file exists — it matches the animal-name shape but is not a real
+# station ID, so it must also fall back to "#".
+WINGBITS_DEVICE_PATH = Path("/etc/wingbits/device")
+WINGBITS_DASHBOARD_URL = "https://wingbits.com/dashboard/stations/{id}?active=map"
+WINGBITS_DEVICE_RE = re.compile(
+    r"^(?:[a-z]+-[a-z]+-[a-z]+"
+    r"|[0-9A-F]{18}"
+    r"|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+)
+WINGBITS_DEVICE_SENTINELS = {"not-wingbits-device", "none"}
+
+
+def _wingbits_dashboard_url() -> str:
+    try:
+        device_id = WINGBITS_DEVICE_PATH.read_text().strip()
+    except OSError:
+        return "#"
+    if (not device_id
+            or device_id in WINGBITS_DEVICE_SENTINELS
+            or not WINGBITS_DEVICE_RE.fullmatch(device_id)):
+        return "#"
+    return WINGBITS_DASHBOARD_URL.format(id=device_id)
+
+
+# Live stats — read-only local values with graceful degradation. Reads are
+# guarded against missing files, partial/malformed data, and services that
+# have not started yet; any failure yields a "—" display value, never a crash.
+# Aircraft count comes from readsb's own JSON output; the satellite count is
+# read from the GeoSigner via `wingbits status`, which needs root, so it goes
+# through the setuid wingbits-status-wrapper.
+READSB_AIRCRAFT_JSON = Path("/run/readsb/aircraft.json")
+WINGBITS_STATUS_WRAPPER = "/usr/local/bin/wingbits-status-wrapper"
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+WINGBITS_SAT_RE = re.compile(r"Geosigner:\s*OK\s*\((\d+)\s+satellites?\)", re.IGNORECASE)
+
+
+def _aircraft_tracked_count() -> str:
+    try:
+        data = json.loads(READSB_AIRCRAFT_JSON.read_text())
+    except (OSError, json.JSONDecodeError):
+        return "—"
+    aircraft = data.get("aircraft") if isinstance(data, dict) else None
+    if not isinstance(aircraft, list):
+        return "—"
+    return str(len(aircraft))
+
+
+def _satellites_in_view_count() -> str:
+    if not Path(WINGBITS_STATUS_WRAPPER).exists():
+        return "—"
+    rc, out, _ = _run([WINGBITS_STATUS_WRAPPER], timeout=10)
+    if rc != 0:
+        return "—"
+    m = WINGBITS_SAT_RE.search(_ANSI_RE.sub("", out or ""))
+    if not m:
+        return "—"
+    return m.group(1)
+
+
 @app.get("/", include_in_schema=False)
 def index(request: Request):
     html = (STATIC_DIR / "index.html").read_text()
     html = html.replace("{{ version }}", GATEWAY_VERSION)
     html = html.replace("{{ tar1090_url }}", _tar1090_url(request))
+    html = html.replace("{{ wingbits_dashboard_url }}", _wingbits_dashboard_url())
+    html = html.replace("{{ aircraft_count }}", _aircraft_tracked_count())
+    html = html.replace("{{ satellites_count }}", _satellites_in_view_count())
     return HTMLResponse(html)
 
 

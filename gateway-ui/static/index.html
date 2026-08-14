@@ -163,14 +163,26 @@
           </div>
         </div>
 
+        <div class="card card-narrow">
+          <div class="card-header">Live Stats</div>
+          <div class="card-body">
+            <div class="kv-row">
+              <span class="kv-label">Aircraft tracked</span>
+              <span class="kv-value">{{ aircraft_count }}</span>
+            </div>
+            <div class="kv-row">
+              <span class="kv-label">Satellites in view</span>
+              <span class="kv-value">{{ satellites_count }}</span>
+            </div>
+          </div>
+        </div>
+
         <div class="card">
-          <div class="card-header">Stats (Coming Soon)</div>
+          <div class="card-header">Links</div>
           <div class="card-body">
             <div class="coming-soon">
-              <p>Satellites in view</p>
-              <p>Aircraft tracked</p>
               <p><a href="{{ tar1090_url }}" target="_blank" rel="noopener noreferrer" class="dim">tar1090 map</a></p>
-              <p><a href="#" class="dim">Wingbits dashboard</a></p>
+              <p><a href="{{ wingbits_dashboard_url }}" target="_blank" rel="noopener noreferrer" class="dim">Wingbits dashboard</a></p>
             </div>
           </div>
         </div>
