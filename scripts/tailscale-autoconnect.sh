@@ -233,6 +233,24 @@ if ! command -v jq >/dev/null 2>&1; then
     exit 0
 fi
 
+# ── User-reauth in progress? Defer ───────────────────────────────────────────
+# The web UI can trigger an interactive user reauth (tailscale up
+# --force-reauth, no authkey) to move this device from tag- to
+# user-authentication. While that is pending the node sits in NeedsLogin with
+# a browser login URL — exactly the state this script would otherwise see and
+# immediately "fix" with the saved tagged key, defeating the reauth. Skip
+# until the reauth resolves (watchdog writes success/fallback) or its state
+# file disappears. The window is bounded by the watchdog deadline, so this
+# deferral can never strand the device permanently.
+REAUTH_STATE="/var/lib/gateway-ui/tailscale-reauth.json"
+if [ -r "$REAUTH_STATE" ]; then
+    reauth_status=$(jq -r '.status // ""' "$REAUTH_STATE" 2>/dev/null || true)
+    if [ "$reauth_status" = "pending" ]; then
+        log "web-UI user reauth in progress — deferring automatic re-auth (watchdog will fall back to the tagged key if the login never completes)"
+        exit 0
+    fi
+fi
+
 if [ ! -f "$KEY_FILE" ]; then
     log "no saved auth key at ${KEY_FILE} — auto re-auth disabled (authenticate once via the web UI Network tab to enable it)"
     exit 0

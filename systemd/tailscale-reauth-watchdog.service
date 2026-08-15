@@ -1,0 +1,20 @@
+[Unit]
+Description=Tailscale user-reauth watchdog (tagged-key fallback)
+Documentation=https://github.com/bitcryptic-gw/sensecap-m1-gateway
+# Only meaningful when the web UI has armed a pending reauth.
+ConditionPathExists=/var/lib/gateway-ui/tailscale-reauth.json
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/gateway/scripts/tailscale-reauth-watchdog.sh
+# Worst-case budget: max reauth window (3600s) + fallback `tailscale up`
+# (90s timeout) + prefs/status overhead (~30s). 3900 leaves ~200s margin.
+TimeoutStartSec=3900
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tailscale-reauth-watchdog
+
+[Install]
+WantedBy=multi-user.target

@@ -406,6 +406,39 @@
             <span id="ts-ssh-result" class="result-msg"></span>
           </div>
         </div>
+
+        <div class="card" id="tailscale-reauth-card">
+          <div class="card-header">Re-authenticate (user login)</div>
+          <div class="card-body">
+            <p class="hint" style="margin-bottom:.75rem;line-height:1.6">
+              Force a new interactive Tailscale login in the browser. Use this
+              to move this device from tag-authenticated to
+              user-authenticated — required to see nodes shared in from another
+              tailnet. A saved tagged auth key is restored automatically if the
+              browser login isn't completed in time.
+            </p>
+            <div class="action-row">
+              <button id="btn-tailscale-reauth" class="btn btn-amber">Re-authenticate…</button>
+              <span id="tailscale-reauth-result" class="result-msg"></span>
+            </div>
+            <div id="tailscale-reauth-confirm" class="hidden">
+              <span class="warn-text">⚠ Reauthentication will briefly disconnect Tailscale. Must be initiated from the LAN, not a tunneled session.</span>
+              <div class="action-row">
+                <button id="btn-tailscale-reauth-exec" class="btn btn-danger">Confirm re-auth</button>
+                <a href="#" id="tailscale-reauth-cancel" class="confirm-cancel">Cancel</a>
+                <span id="tailscale-reauth-countdown" class="result-msg"></span>
+              </div>
+            </div>
+            <div id="tailscale-reauth-pending" class="hidden">
+              <p class="hint" style="margin-bottom:.5rem">Complete this login in the browser within the watchdog window:</p>
+              <p id="tailscale-reauth-urlbox"></p>
+              <div id="tailscale-reauth-qr"></div>
+              <p class="hint" id="tailscale-reauth-timer"></p>
+              <p class="hint" id="tailscale-reauth-lan-warning"></p>
+            </div>
+            <div id="tailscale-reauth-outcome" class="hidden"></div>
+          </div>
+        </div>
       </div>
 
       <h3 class="sub-section-title">Web UI</h3>

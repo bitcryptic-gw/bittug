@@ -663,6 +663,7 @@ async function loadNetwork() {
       ifaces.value.wlan0 || {}
     );
   }
+  loadReauthStatus();
 }
 
 function renderInterfaces(d) {
@@ -1215,6 +1216,164 @@ async function applyTailscaleSsh(enabled) {
     if (e.message !== 'unauthorized') {
       showResult('ts-ssh-result', e.message, true);
       document.getElementById('ts-ssh-toggle').checked = !enabled;
+    }
+  }
+}
+
+// ── Network — Tailscale Re-auth (user login) ─────────────────────────────────
+
+const TS_REAUTH_WINDOW_DEFAULT = 480;
+let tsReauthArmed = false;
+let tsReauthTimer = null;
+let tsReauthPoll = null;
+
+function tsReauthResetArmed() {
+  tsReauthArmed = false;
+  clearTimeout(tsReauthTimer);
+  tsReauthTimer = null;
+  document.getElementById('btn-tailscale-reauth').textContent = 'Re-authenticate…';
+  document.getElementById('tailscale-reauth-confirm').classList.add('hidden');
+}
+
+function armTailscaleReauth() {
+  if (tsReauthArmed) {
+    confirmTailscaleReauth();
+    return;
+  }
+  tsReauthArmed = true;
+  document.getElementById('btn-tailscale-reauth').textContent = 'Confirm re-auth?';
+  document.getElementById('tailscale-reauth-confirm').classList.remove('hidden');
+  document.getElementById('btn-tailscale-reauth').disabled = true;
+  let sec = 15;
+  document.getElementById('tailscale-reauth-countdown').textContent = `(auto-cancel in ${sec}s)`;
+  tsReauthTimer = setInterval(() => {
+    sec--;
+    document.getElementById('tailscale-reauth-countdown').textContent = `(auto-cancel in ${sec}s)`;
+    if (sec <= 0) {
+      tsReauthResetArmed();
+      document.getElementById('btn-tailscale-reauth').disabled = false;
+    }
+  }, 1000);
+}
+
+async function confirmTailscaleReauth() {
+  const btn = document.getElementById('btn-tailscale-reauth');
+  const result = document.getElementById('tailscale-reauth-result');
+  tsReauthResetArmed();
+  btn.disabled = true;
+  btn.textContent = 'Triggering…';
+  try {
+    const d = await api('/api/network/tailscale/reauth', 'POST', { confirm: true });
+    btn.classList.add('hidden');
+    showReauthPending(d);
+    loadReauthStatus();
+    if (!tsReauthPoll) tsReauthPoll = setInterval(loadReauthStatus, 5000);
+  } catch (e) {
+    if (e.message !== 'unauthorized') showResult('tailscale-reauth-result', e.message, true);
+    btn.disabled = false;
+    btn.textContent = 'Re-authenticate…';
+  }
+}
+
+function showReauthPending(d) {
+  document.getElementById('tailscale-reauth-pending').classList.remove('hidden');
+  document.getElementById('tailscale-reauth-outcome').classList.add('hidden');
+  const url = (typeof d.auth_url === 'string' && /^https:\/\/[A-Za-z0-9./_-]+$/.test(d.auth_url)) ? d.auth_url : '';
+  const urlbox = document.getElementById('tailscale-reauth-urlbox');
+  if (url) {
+    urlbox.innerHTML = `<a class="btn btn-primary" href="${url}" target="_blank" rel="noopener">Open login page</a> ` +
+      `<code style="word-break:break-all">${url}</code>`;
+  } else {
+    urlbox.textContent = 'Waiting for login URL from tailscaled…';
+  }
+  const qr = document.getElementById('tailscale-reauth-qr');
+  qr.innerHTML = '';
+  if (url && d.qr_svg) {
+    qr.innerHTML = `<img src="data:image/svg+xml;utf8,${encodeURIComponent(d.qr_svg)}" width="180" height="180" alt="Login QR code">`;
+  }
+  updateReauthTimer(d);
+}
+
+function updateReauthTimer(d) {
+  const timer = document.getElementById('tailscale-reauth-timer');
+  if (d.status === 'pending') {
+    const m = Math.floor(d.remaining / 60);
+    const s = d.remaining % 60;
+    timer.textContent = `Watchdog window: ${m}m ${s}s remaining — if the browser login isn't completed, the saved tagged auth key is restored.`;
+  } else {
+    timer.textContent = '';
+  }
+}
+
+async function loadReauthStatus() {
+  try {
+    const d = await api('/api/network/tailscale/reauth');
+    renderReauthStatus(d);
+    // Resume polling if a reauth is pending (e.g. after a page reload).
+    if (d.status === 'pending' && !tsReauthPoll) {
+      tsReauthPoll = setInterval(loadReauthStatus, 5000);
+    }
+  } catch (e) {
+    if (e.message !== 'unauthorized') {
+      // ignore — reauth is optional UI; backend may be older
+    }
+  }
+}
+
+function renderReauthStatus(d) {
+  const btn = document.getElementById('btn-tailscale-reauth');
+  const pending = document.getElementById('tailscale-reauth-pending');
+  const outcome = document.getElementById('tailscale-reauth-outcome');
+  const lanWarn = document.getElementById('tailscale-reauth-lan-warning');
+
+  if (d.status === 'pending') {
+    pending.classList.remove('hidden');
+    outcome.classList.add('hidden');
+    btn.classList.add('hidden');
+    updateReauthTimer(d);
+    if (d.auth_url) {
+      const url = d.auth_url;
+      const urlbox = document.getElementById('tailscale-reauth-urlbox');
+      urlbox.innerHTML = `<a class="btn btn-primary" href="${url}" target="_blank" rel="noopener">Open login page</a> ` +
+        `<code style="word-break:break-all">${url}</code>`;
+      const qr = document.getElementById('tailscale-reauth-qr');
+      qr.innerHTML = d.qr_svg
+        ? `<img src="data:image/svg+xml;utf8,${encodeURIComponent(d.qr_svg)}" width="180" height="180" alt="Login QR code">`
+        : '';
+    }
+    if (!d.lan_source) {
+      lanWarn.textContent = `⚠ Current session is NOT on the LAN (${d.lan_reason || 'unknown'}). The login link is shown here, but re-auth must be initiated from a LAN session.`;
+    } else {
+      lanWarn.textContent = '';
+    }
+  } else {
+    btn.classList.remove('hidden');
+    // Allow re-auth again once a previous attempt has resolved (idle,
+    // success, fallback) — only block while one is actually pending.
+    btn.disabled = d.status === 'pending' || !d.lan_source;
+    pending.classList.add('hidden');
+    if (d.status !== 'idle') {
+      outcome.classList.remove('hidden');
+      const labels = {
+        success: '✅ User re-auth complete — connection is user-authenticated.',
+        fallback: '⚠️ Re-auth window elapsed — restored the saved tagged auth key.',
+        'fallback-failed': '❌ Re-auth failed and the tagged-key fallback failed. Check /etc/gateway/tailscale.key.',
+      };
+      outcome.textContent = labels[d.status] || `Re-auth outcome: ${d.status}`;
+      outcome.className = 'result-msg ' + (d.status === 'success' ? 'result-ok' : 'result-error');
+    } else {
+      outcome.classList.add('hidden');
+      outcome.textContent = '';
+    }
+    if (!d.lan_source) {
+      lanWarn.textContent = `⚠ This session is NOT on the LAN (${d.lan_reason || 'unknown'}) — re-authentication must be initiated from a LAN session.`;
+      btn.title = 'Re-auth must be initiated from the LAN';
+    } else {
+      lanWarn.textContent = '';
+    }
+    if (tsReauthPoll) {
+      clearInterval(tsReauthPoll);
+      tsReauthPoll = null;
     }
   }
 }
@@ -2172,6 +2331,15 @@ function wireEvents() {
 
   // Network — Tailscale routing apply
   document.getElementById('btn-ts-routing').addEventListener('click', applyTailscaleRouting);
+
+  // Network — Tailscale re-auth
+  document.getElementById('btn-tailscale-reauth').addEventListener('click', armTailscaleReauth);
+  document.getElementById('btn-tailscale-reauth-exec').addEventListener('click', confirmTailscaleReauth);
+  document.getElementById('tailscale-reauth-cancel').addEventListener('click', e => {
+    e.preventDefault();
+    tsReauthResetArmed();
+    document.getElementById('btn-tailscale-reauth').disabled = false;
+  });
 
   // Network — WiFi toggle (delegated)
   document.addEventListener('change', async function(e) {

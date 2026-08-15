@@ -8,3 +8,8 @@ bind_host=0.0.0.0
 
 # TCP port to listen on. Default 8080.
 port=8080
+
+# Tailscale user reauth watchdog window, in seconds (120-3600, default 480 = 8
+# minutes). This is how long the web UI waits for the interactive browser
+# login to complete before falling back to the saved tagged auth key.
+# tailscale_reauth_window=480

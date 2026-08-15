@@ -238,6 +238,23 @@ else
     log "WARNING: ${INSTALL_DEPIN} not found or not executable"
 fi
 
+# --- Tailscale reauth watchdog unit deployment ---
+# Installs the tailscale-reauth-watchdog.service oneshot unit used by the
+# gateway-ui Tailscale user-reauth flow (fallback to the saved tagged auth key
+# if an interactive reauth is never completed). Idempotent: cp overwrite +
+# daemon-reload are no-op-safe. Not enabled as a boot unit — it is armed
+# on-demand by tailscale-wrapper's reauth subcommand via `systemctl start`.
+REAUTH_UNIT_SRC="/opt/gateway/systemd/tailscale-reauth-watchdog.service"
+REAUTH_SCRIPT_SRC="/opt/gateway/scripts/tailscale-reauth-watchdog.sh"
+if [ -f "$REAUTH_UNIT_SRC" ] && [ -f "$REAUTH_SCRIPT_SRC" ]; then
+    cp "$REAUTH_UNIT_SRC" /etc/systemd/system/tailscale-reauth-watchdog.service
+    chmod +x "$REAUTH_SCRIPT_SRC"
+    systemctl daemon-reload
+    log "Deployed tailscale-reauth-watchdog.service"
+else
+    log "WARNING: tailscale-reauth-watchdog unit/script missing — skipping"
+fi
+
 # --- Cgroup memory controller for DePIN container limits ---
 # Raspberry Pi firmware injects cgroup_disable=memory by default, which
 # silently ignores Docker --memory=<X> limits. Adds cgroup_memory=1 to

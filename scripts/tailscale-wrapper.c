@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -15,6 +16,14 @@
 #define KEY_FILE      "/etc/gateway/tailscale.key"
 #define KEY_TMP       "/etc/gateway/.tailscale.key.tmp"
 #define OPERATOR_USER "gateway-ui"
+
+#define REAUTH_STATE     "/var/lib/gateway-ui/tailscale-reauth.json"
+#define REAUTH_PID       "/var/lib/gateway-ui/tailscale-reauth.pid"
+#define REAUTH_LOG       "/var/log/gateway-tailscale-reauth.log"
+#define REAUTH_WATCHDOG  "tailscale-reauth-watchdog.service"
+#define SYSTEMCTL_BIN    "/usr/bin/systemctl"
+#define REAUTH_WINDOW_MIN     120
+#define REAUTH_WINDOW_MAX     3600
 
 /* ── Validation helpers ──────────────────────────────────────────────────── */
 
@@ -364,6 +373,176 @@ static int do_auth(const char *key) {
     return rc == 0 ? 0 : (rc > 0 ? rc : 1);
 }
 
+/* ── reauth subcommand ─────────────────────────────────────────────────────── */
+/* Interactive/browser reauthentication (no authkey). Runs a single atomic
+   `tailscale up --force-reauth` as a detached background process, records its
+   PID, writes a pending state file, and arms the reauth watchdog service so a
+   timed fallback to the saved tagged auth key can restore the connection even
+   if this UI's own tailnet path goes down mid-reauth.
+
+   The login URL is NOT parsed here: tailscaled exposes it as AuthURL in
+   `tailscale status --json` once the node drops into NeedsLogin, which the
+   FastAPI layer reads directly. */
+
+static int is_all_digits(const char *s) {
+    if (!s || *s == '\0')
+        return 0;
+    for (; *s; s++)
+        if (*s < '0' || *s > '9')
+            return 0;
+    return 1;
+}
+
+static int parse_window(const char *s) {
+    if (!is_all_digits(s))
+        return -1;
+    long w = strtol(s, NULL, 10);
+    if (w < REAUTH_WINDOW_MIN || w > REAUTH_WINDOW_MAX)
+        return -1;
+    return (int)w;
+}
+
+static int reauth_in_progress(void) {
+    FILE *f = fopen(REAUTH_STATE, "r");
+    if (!f)
+        return 0;
+    char buf[256];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    return strstr(buf, "\"status\":\"pending\"") != NULL ||
+           strstr(buf, "\"status\": \"pending\"") != NULL;
+}
+
+/* Spawn argv as a detached background process. Redirects its stdin to
+   /dev/null and stdout/stderr to logpath (0644 so the gateway-ui status
+   endpoint can read the log), writes the child PID to pidpath. Returns 0 on
+   success, -1 on fork failure. The child must not retain any inherited pipe
+   fds from the caller (FastAPI's subprocess capture), or the caller's
+   communicate() would block on EOF until the child exits. */
+static int spawn_detached(char *const argv[], const char *pidpath, const char *logpath) {
+    pid_t pid = fork();
+    if (pid == -1) {
+        fprintf(stderr, "ERROR: fork failed: %s\n", strerror(errno));
+        return -1;
+    }
+    if (pid == 0) {
+        if (setsid() == -1)
+            _exit(127);
+        int nullfd = open("/dev/null", O_RDONLY);
+        if (nullfd >= 0) {
+            dup2(nullfd, STDIN_FILENO);
+            if (nullfd > 2)
+                close(nullfd);
+        }
+        int fd = open(logpath, O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (fd >= 0) {
+            dup2(fd, STDOUT_FILENO);
+            dup2(fd, STDERR_FILENO);
+            if (fd > 2)
+                close(fd);
+        }
+        execv(argv[0], argv);
+        _exit(127);
+    }
+    FILE *pf = fopen(pidpath, "w");
+    if (pf) {
+        fprintf(pf, "%d\n", (int)pid);
+        fclose(pf);
+    }
+    return 0;
+}
+
+static int do_reauth(int window) {
+    if (reauth_in_progress()) {
+        fprintf(stderr, "ERROR: a reauthentication is already in progress — wait for it to complete or fall back\n");
+        return 1;
+    }
+
+    /* Preserve non-default prefs explicitly (see do_auth header). */
+    static char prefs[16384];
+    int prefs_ok = 0;
+    {
+        char *prefs_argv[] = {TAILSCALE_BIN, "debug", "prefs", NULL};
+        if (run_capture(prefs_argv, prefs, sizeof(prefs)) == 0 && prefs[0] &&
+            strlen(prefs) < sizeof(prefs) - 1)
+            prefs_ok = 1;
+    }
+
+    int run_ssh = 0;
+    int have_ssh = 0;
+    static char routes[2048];
+    int have_routes = 0;
+    static char hostname_pref[128];
+    int have_hostname = 0;
+
+    if (prefs_ok) {
+        have_ssh = extract_json_bool(prefs, "RunSSH", &run_ssh);
+        if (extract_json_routes(prefs, routes, sizeof(routes)) &&
+            routes[0] != '\0' && is_safe_prefs_route_list(routes))
+            have_routes = 1;
+        if (extract_json_string(prefs, "Hostname", hostname_pref, sizeof(hostname_pref)) &&
+            hostname_pref[0] != '\0' && is_safe_hostname(hostname_pref))
+            have_hostname = 1;
+    }
+
+    char operator_arg[] = "--operator=" OPERATOR_USER;
+    char force_arg[]    = "--force-reauth";
+    char risk_arg[]     = "--accept-risk=lose-ssh";
+    char ssh_arg[16];
+    snprintf(ssh_arg, sizeof(ssh_arg), "--ssh=%s", run_ssh ? "true" : "false");
+    char routes_arg[2064];
+    snprintf(routes_arg, sizeof(routes_arg), "--advertise-routes=%s", routes);
+    char hostname_arg[160];
+    snprintf(hostname_arg, sizeof(hostname_arg), "--hostname=%s", hostname_pref);
+
+    char *up_argv[10];
+    int n = 0;
+    up_argv[n++] = TAILSCALE_BIN;
+    up_argv[n++] = "up";
+    up_argv[n++] = force_arg;
+    up_argv[n++] = risk_arg;
+    up_argv[n++] = operator_arg;
+    if (have_ssh)
+        up_argv[n++] = ssh_arg;
+    if (have_routes)
+        up_argv[n++] = routes_arg;
+    if (have_hostname)
+        up_argv[n++] = hostname_arg;
+    up_argv[n] = NULL;
+
+    long now = (long)time(NULL);
+
+    /* Write pending state BEFORE spawning so the watchdog can act even if the
+       spawn or arming step below fails partway. */
+    FILE *sf = fopen(REAUTH_STATE, "w");
+    if (!sf) {
+        fprintf(stderr, "ERROR: cannot write %s: %s\n", REAUTH_STATE, strerror(errno));
+        return 1;
+    }
+    fprintf(sf, "{\"status\":\"pending\",\"triggered_at\":%ld,\"window\":%d,\"deadline\":%ld}\n",
+            now, window, now + (long)window);
+    fclose(sf);
+    chmod(REAUTH_STATE, 0644);
+
+    if (spawn_detached(up_argv, REAUTH_PID, REAUTH_LOG) != 0) {
+        unlink(REAUTH_STATE);
+        return 1;
+    }
+    chmod(REAUTH_PID, 0644);
+    chmod(REAUTH_LOG, 0644);
+
+    /* Arm the watchdog: independent systemd oneshot that survives this UI's
+       own connection being severed by the reauth it supervises. */
+    char *ctl_argv[] = {SYSTEMCTL_BIN, "start", "--no-block", REAUTH_WATCHDOG, NULL};
+    int rc = run(ctl_argv);
+    if (rc != 0)
+        fprintf(stderr, "WARNING: failed to start %s (exit %d) — watchdog not armed\n", REAUTH_WATCHDOG, rc);
+
+    fprintf(stderr, "reauthentication triggered (window %ds)\n", window);
+    return 0;
+}
+
 /* ── main ────────────────────────────────────────────────────────────────── */
 
 int main(int argc, char *argv[]) {
@@ -378,11 +557,30 @@ int main(int argc, char *argv[]) {
     }
 
     if (argc < 2) {
-        fprintf(stderr, "ERROR: usage: tailscale-wrapper <auth|set-routes|set-ssh> [args]\n");
+        fprintf(stderr, "ERROR: usage: tailscale-wrapper <auth|set-routes|set-ssh|reauth> [args]\n");
         return 1;
     }
 
     const char *subcmd = argv[1];
+
+    if (strcmp(subcmd, "reauth") == 0) {
+        if (argc != 3) {
+            fprintf(stderr, "ERROR: usage: tailscale-wrapper reauth <window-seconds>\n");
+            return 1;
+        }
+        int window = parse_window(argv[2]);
+        if (window < 0) {
+            fprintf(stderr, "ERROR: window must be an integer between %d and %d seconds\n",
+                    REAUTH_WINDOW_MIN, REAUTH_WINDOW_MAX);
+            return 1;
+        }
+
+        setgroups(0, NULL);
+        setgid(0);
+        setuid(0);
+
+        return do_reauth(window);
+    }
 
     if (strcmp(subcmd, "auth") == 0) {
         if (argc != 3) {
@@ -450,6 +648,6 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    fprintf(stderr, "ERROR: unknown subcommand '%s' — use auth, set-routes, or set-ssh\n", subcmd);
+    fprintf(stderr, "ERROR: unknown subcommand '%s' — use auth, set-routes, set-ssh, or reauth\n", subcmd);
     return 1;
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import asyncio
 import hmac
+import ipaddress
 import json
 import logging
 import re
@@ -8,6 +9,7 @@ import secrets
 import socket
 import subprocess
 import sys
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1351,6 +1353,198 @@ async def api_tailscale_ssh(_: Auth, request: Request):
         raise HTTPException(status_code=500, detail=err or out or "tailscale ssh failed")
 
     return {"ok": True, "output": out}
+
+
+# ── Network — Tailscale user re-authentication (interactive/browser login) ───
+
+TS_REAUTH_STATE = Path("/var/lib/gateway-ui/tailscale-reauth.json")
+TS_REAUTH_LOG   = Path("/var/log/gateway-tailscale-reauth.log")
+TS_REAUTH_WINDOW_DEFAULT = 480   # seconds (8 min) — tunable, see config
+TS_REAUTH_WINDOW_MIN     = 120
+TS_REAUTH_WINDOW_MAX     = 3600
+TS_TAILSCALE_CGNAT = ipaddress.ip_network("100.64.0.0/10")
+
+
+def _lan_ipv4_subnets() -> list:
+    """IPv4 subnets of the gateway's physical LAN interfaces (eth0/wlan0).
+
+    Deliberately excludes loopback, tailscale0, and virtual bridge/container
+    interfaces (docker0, veth*, br-*, virbr*): only a request whose source IP
+    falls inside a real physical-LAN subnet is treated as LAN-origin. Returns
+    empty list on failure (gate fails closed)."""
+    subnets: list = []
+    rc, out, _ = _run(["ip", "-4", "-o", "addr", "show"])
+    if rc != 0:
+        return subnets
+    for line in out.splitlines():
+        m = re.match(r"^\d+:\s+(\S+)\s+inet\s+([0-9.]+/\d+)", line)
+        if not m:
+            continue
+        iface, cidr = m.group(1), m.group(2)
+        if iface in ("lo", "tailscale0") or iface.startswith("tailscale"):
+            continue
+        if iface.startswith(("docker", "veth", "br-", "virbr", "vmbr", "vlan")):
+            continue
+        try:
+            subnets.append(ipaddress.ip_network(cidr, strict=False))
+        except ValueError:
+            continue
+    return subnets
+
+
+def _request_is_lan(request: Request) -> tuple[bool, str]:
+    """LAN-origin gate for the reauth trigger.
+
+    Returns (True, "") when the request source is the physical LAN (or
+    loopback), else (False, reason). Any source in Tailscale's CGNAT range
+    100.64.0.0/10 is tunneled — blocked even though it is technically an
+    RFC1918-like address — and so is any source not in a known LAN subnet.
+
+    Spoofing check (Tailscale subnet routing): with the default
+    --snat-subnet-routes=true, a remote tailnet peer reaching the gateway's
+    LAN IP via a subnet router is source-NAT'd to the router's own tailnet IP
+    (100.x), so it can never present a LAN source to this socket. Traffic from
+    a peer is always seen as 100.x here. The one residual gap would be a
+    third-party subnet router advertising this exact LAN subnet *and* an
+    operator explicitly disabling SNAT — neither applies to this deployment.
+    """
+    host = request.client.host if request.client else ""
+    if not host:
+        return False, "no client address"
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False, f"unparseable source {host!r}"
+    if ip.is_loopback:
+        return True, ""
+    if ip.version == 4 and ip in TS_TAILSCALE_CGNAT:
+        return False, f"source {host} is a Tailscale address (tunneled session)"
+    for net in _lan_ipv4_subnets():
+        if ip in net:
+            return True, ""
+    return False, f"source {host} is not on the gateway's LAN"
+
+
+def _tailscale_auth_url() -> str:
+    rc, out, _ = _run([_TAILSCALE, "status", "--json"])
+    if rc != 0:
+        return ""
+    try:
+        return str(json.loads(out).get("AuthURL") or "")
+    except (json.JSONDecodeError, AttributeError):
+        return ""
+
+
+def _qr_svg(url: str) -> str | None:
+    """Render url as an SVG QR code. Returns None if the optional `qrcode`
+    package isn't installed — the UI then falls back to a plain link."""
+    if not url:
+        return None
+    try:
+        import qrcode  # lazy: optional dependency, not required to run the UI
+        from qrcode.image.svg import SvgPathImage
+
+        qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M)
+        qr.add_data(url)
+        qr.make(fit=True)
+        return qr.make_image(image_factory=SvgPathImage).to_string().decode("utf-8")
+    except Exception:
+        return None
+
+
+@app.get("/api/network/tailscale/reauth")
+def api_tailscale_reauth_status(_: Auth, request: Request):
+    """Reauth state, viewable from anywhere (Bearer-auth'd).
+
+    LAN-origin is *reported* so the UI can warn the operator, but only the
+    trigger (POST) is gated on it."""
+    lan, reason = _request_is_lan(request)
+    state: dict = {}
+    if TS_REAUTH_STATE.exists():
+        try:
+            state = json.loads(TS_REAUTH_STATE.read_text())
+        except (json.JSONDecodeError, OSError):
+            state = {}
+    status = str(state.get("status", "idle"))
+    deadline = int(state.get("deadline", 0) or 0)
+    remaining = max(0, deadline - int(time.time())) if status == "pending" else 0
+
+    log_tail = ""
+    if TS_REAUTH_LOG.exists():
+        try:
+            log_tail = "\n".join(TS_REAUTH_LOG.read_text().splitlines()[-30:])
+        except OSError:
+            pass
+
+    auth_url = _tailscale_auth_url() if status == "pending" else ""
+
+    return {
+        "status": status,
+        "remaining": remaining,
+        "window": int(state.get("window", 0) or 0),
+        "auth_url": auth_url,
+        "qr_svg": _qr_svg(auth_url) if auth_url else None,
+        "lan_source": lan,
+        "lan_reason": reason,
+        "log": log_tail,
+    }
+
+
+@app.post("/api/network/tailscale/reauth")
+async def api_tailscale_reauth(_: Auth, request: Request):
+    """Trigger a user reauthentication (interactive/browser login, no authkey).
+
+    Requires explicit confirmation AND a LAN-origin session. Running the
+    atomic `tailscale up --force-reauth` from a tunneled session could sever
+    the very connection being used to manage the gateway, so tunneled
+    requests are refused here."""
+    body = await request.json()
+    if body.get("confirm") is not True:
+        raise HTTPException(status_code=400, detail="Explicit confirmation required (confirm: true)")
+
+    lan, reason = _request_is_lan(request)
+    if not lan:
+        raise HTTPException(status_code=403, detail=f"Reauthentication must be initiated from the LAN — {reason}")
+
+    if not Path(_TS_WRAPPER).exists():
+        raise HTTPException(status_code=503, detail="tailscale-wrapper not installed — run install-tailscale.sh")
+    if not _service_installed("tailscale-reauth-watchdog.service"):
+        raise HTTPException(status_code=503, detail="tailscale-reauth-watchdog.service not installed — re-run sync-provisioning.sh")
+
+    ts_info = _service_info("tailscaled.service")
+    if ts_info["state"] != "active":
+        raise HTTPException(status_code=503, detail="tailscaled.service is not running — start it before re-authenticating")
+
+    if TS_REAUTH_STATE.exists():
+        try:
+            st = json.loads(TS_REAUTH_STATE.read_text())
+        except (json.JSONDecodeError, OSError):
+            st = {}
+        if st.get("status") == "pending":
+            raise HTTPException(status_code=409, detail="A reauthentication is already in progress")
+
+    try:
+        window = int(CONFIG.get("tailscale_reauth_window", TS_REAUTH_WINDOW_DEFAULT))
+    except (TypeError, ValueError):
+        window = TS_REAUTH_WINDOW_DEFAULT
+    window = max(TS_REAUTH_WINDOW_MIN, min(TS_REAUTH_WINDOW_MAX, window))
+
+    rc, out, err = await _run_async([_TS_WRAPPER, "reauth", str(window)], timeout=30)
+    if rc != 0:
+        raise HTTPException(status_code=500, detail=err or out or "tailscale reauth failed")
+
+    # Capture the interactive login URL from tailscaled once it drops into
+    # NeedsLogin (poll briefly; the known upstream hang is handled by the
+    # watchdog, not here).
+    auth_url = ""
+    for _ in range(20):
+        auth_url = _tailscale_auth_url()
+        if auth_url:
+            break
+        await asyncio.sleep(0.5)
+
+    return {"ok": True, "auth_url": auth_url, "qr_svg": _qr_svg(auth_url) if auth_url else None,
+            "window": window, "status": "pending", "remaining": window}
 
 
 # ── System / Version ──────────────────────────────────────────────────────────
