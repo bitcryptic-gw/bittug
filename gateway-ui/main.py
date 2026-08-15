@@ -1358,7 +1358,8 @@ async def api_tailscale_ssh(_: Auth, request: Request):
 # ── Network — Tailscale user re-authentication (interactive/browser login) ───
 
 TS_REAUTH_STATE = Path("/var/lib/gateway-ui/tailscale-reauth.json")
-TS_REAUTH_LOG   = Path("/var/log/gateway-tailscale-reauth.log")
+TS_REAUTH_PID   = Path("/var/lib/gateway-ui/tailscale-reauth.pid")
+TS_REAUTH_LOG   = Path("/var/lib/gateway-ui/tailscale-reauth.log")
 TS_REAUTH_WINDOW_DEFAULT = 480   # seconds (8 min) — tunable, see config
 TS_REAUTH_WINDOW_MIN     = 120
 TS_REAUTH_WINDOW_MAX     = 3600
@@ -1565,7 +1566,7 @@ async def api_tailscale_reauth(_: Auth, request: Request):
             # whatever it did manage to log rather than a bare timeout.
             proc.kill()
             await proc.wait()
-            raise HTTPException(status_code=500, detail="tailscale reauth wrapper timed out — see /var/log/gateway-tailscale-reauth.log")
+            raise HTTPException(status_code=500, detail="tailscale reauth wrapper timed out — see /var/lib/gateway-ui/tailscale-reauth.log")
     finally:
         log_handle.close()
 

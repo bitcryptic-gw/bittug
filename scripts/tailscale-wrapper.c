@@ -19,7 +19,7 @@
 
 #define REAUTH_STATE     "/var/lib/gateway-ui/tailscale-reauth.json"
 #define REAUTH_PID       "/var/lib/gateway-ui/tailscale-reauth.pid"
-#define REAUTH_LOG       "/var/log/gateway-tailscale-reauth.log"
+#define REAUTH_LOG       "/var/lib/gateway-ui/tailscale-reauth.log"
 #define REAUTH_WATCHDOG  "tailscale-reauth-watchdog.service"
 #define SYSTEMCTL_BIN    "/usr/bin/systemctl"
 #define REAUTH_WINDOW_MIN     120
@@ -435,7 +435,7 @@ static int spawn_detached(char *const argv[], const char *pidpath, const char *l
             if (nullfd > 2)
                 close(nullfd);
         }
-        int fd = open(logpath, O_WRONLY | O_CREAT | O_APPEND, 0644);
+        int fd = open(logpath, O_WRONLY | O_CREAT | O_APPEND, 0664);
         if (fd >= 0) {
             dup2(fd, STDOUT_FILENO);
             dup2(fd, STDERR_FILENO);
@@ -530,7 +530,9 @@ static int do_reauth(int window) {
         return 1;
     }
     chmod(REAUTH_PID, 0644);
-    chmod(REAUTH_LOG, 0644);
+    /* Group-writable (0664): the log lives in /var/lib/gateway-ui (setgid
+       gateway-ui) and the gateway-ui FastAPI process appends to it. */
+    chmod(REAUTH_LOG, 0664);
 
     /* Arm the watchdog: independent systemd oneshot that survives this UI's
        own connection being severed by the reauth it supervises. */

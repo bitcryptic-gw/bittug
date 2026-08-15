@@ -31,7 +31,7 @@ set -euo pipefail
 
 STATE_FILE="/var/lib/gateway-ui/tailscale-reauth.json"
 PID_FILE="/var/lib/gateway-ui/tailscale-reauth.pid"
-LOG_FILE="/var/log/gateway-tailscale-reauth.log"
+LOG_FILE="/var/lib/gateway-ui/tailscale-reauth.log"
 KEY_FILE="/etc/gateway/tailscale.key"
 TAILSCALE_BIN="/usr/bin/tailscale"
 SYSTEMCTL_BIN="/usr/bin/systemctl"
