@@ -1435,6 +1435,17 @@ def _tailscale_auth_url() -> str:
         return ""
 
 
+def _reauth_log_tail(lines: int = 20) -> str:
+    """Tail of the reauth log — used to surface wrapper errors in the API
+    response instead of a bare failure."""
+    if not TS_REAUTH_LOG.exists():
+        return ""
+    try:
+        return "\n".join(TS_REAUTH_LOG.read_text().splitlines()[-lines:])
+    except OSError:
+        return ""
+
+
 def _qr_svg(url: str) -> str | None:
     """Render url as an SVG QR code. Returns None if the optional `qrcode`
     package isn't installed — the UI then falls back to a plain link."""
@@ -1529,9 +1540,38 @@ async def api_tailscale_reauth(_: Auth, request: Request):
         window = TS_REAUTH_WINDOW_DEFAULT
     window = max(TS_REAUTH_WINDOW_MIN, min(TS_REAUTH_WINDOW_MAX, window))
 
-    rc, out, err = await _run_async([_TS_WRAPPER, "reauth", str(window)], timeout=30)
+    # Run the wrapper with its stdout/stderr redirected to the reauth log file
+    # (NOT captured as pipes). The wrapper detaches a long-lived `tailscale up
+    # --force-reauth` grandchild; if we captured pipes and waited on EOF, that
+    # descendant could hold a pipe write-end open and stall the response until
+    # the timeout (observed on first use: HTTP 500 {"detail":"timeout"} despite
+    # the reauth succeeding in ~0.1s). Waiting on process exit instead — with
+    # output going to a file — decouples the response from the detached child.
+    TS_REAUTH_LOG.parent.mkdir(parents=True, exist_ok=True)
+    log_handle = open(TS_REAUTH_LOG, "ab")
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            _TS_WRAPPER, "reauth", str(window),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=log_handle,
+            stderr=log_handle,
+            start_new_session=True,
+        )
+        try:
+            rc = await asyncio.wait_for(proc.wait(), timeout=15)
+        except asyncio.TimeoutError:
+            # The wrapper has 15s to write state + spawn + arm the watchdog;
+            # it normally finishes in ~0.1s. If it genuinely stalls, surface
+            # whatever it did manage to log rather than a bare timeout.
+            proc.kill()
+            await proc.wait()
+            raise HTTPException(status_code=500, detail="tailscale reauth wrapper timed out — see /var/log/gateway-tailscale-reauth.log")
+    finally:
+        log_handle.close()
+
     if rc != 0:
-        raise HTTPException(status_code=500, detail=err or out or "tailscale reauth failed")
+        detail = _reauth_log_tail(20) or "tailscale reauth failed"
+        raise HTTPException(status_code=500, detail=detail)
 
     # Capture the interactive login URL from tailscaled once it drops into
     # NeedsLogin (poll briefly; the known upstream hang is handled by the

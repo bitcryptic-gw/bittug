@@ -98,6 +98,47 @@ user_auth_confirmed() {
     [ "$backend" = "Running" ] && [ "$online" = "true" ] && [ "$tags" -eq 0 ]
 }
 
+# ── Netmap flush ──────────────────────────────────────────────────────────────
+# After a tagged→user reauth the node key changes and the control server pushes
+# a fresh netmap for the NEW identity. In practice the daemon can keep serving
+# the OLD packet-filter ruleset (which, for a tag-authenticated device, excluded
+# nodes shared in from another tailnet), so DNS resolution and `tailscale ping`
+# work but TCP to shared hosts times out until the daemon re-fetches a fresh
+# netmap. Observed on sensecap-8397f8 and unraid-wildwood (2026-08-15): NTFY
+# (a shared-in ntfy.pygmy-bramble node) was unreachable over TCP until
+# `systemctl restart tailscaled`; after the restart it worked immediately.
+#
+# The lightweight alternatives were checked and are NOT sufficient:
+#   - `tailscale debug force-netmap-update` only re-applies the CURRENT netmap
+#     (no fresh fetch from control) — it exists for load testing.
+#   - `tailscale debug clear-netmap-cache` only clears the on-disk cache (and
+#     netmap caching is disabled here anyway: control-knobs CacheNetworkMaps).
+#   - A full daemon restart forces a fresh netmap from control, which carries
+#     the correct packet filter for the new user-owned identity. This is the
+#     documented recovery for the related upstream bug (tailscale/tailscale
+#     #20521, "client.Shutdown orphan after force-reauth").
+#
+# This runs on the SUCCESS path, BEFORE writing final state, so a successful
+# reauth is never left in a state where shared-node TCP is broken.
+flush_netmap() {
+    log "flushing stale post-reauth netmap — restarting tailscaled"
+    if ! "$SYSTEMCTL_BIN" restart tailscaled; then
+        log "WARNING: systemctl restart tailscaled FAILED — shared-node TCP (e.g. NTFY) may be broken until a manual restart"
+        return 1
+    fi
+    # tailscaled restarting takes a few seconds; re-verify the user-auth state
+    # (fresh netmap should land within this loop).
+    for _ in $(seq 1 15); do
+        sleep 2
+        if user_auth_confirmed; then
+            log "netmap flush OK — tailscaled restarted, still user-authenticated (Running, online, no tags)"
+            return 0
+        fi
+    done
+    log "WARNING: after restart, user-auth state not re-confirmed within 30s — netmap may still be stale"
+    return 1
+}
+
 # ── main ─────────────────────────────────────────────────────────────────────
 
 # No pending reauth state → nothing to supervise.
@@ -136,6 +177,7 @@ log "window elapsed — checking for user-authenticated connection"
 if user_auth_confirmed; then
     log "SUCCESS: user-authenticated connection established (Running, online, no ACL tags)"
     kill_pending_reauth
+    flush_netmap
     write_status "success"
     exit 0
 fi

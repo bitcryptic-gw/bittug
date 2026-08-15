@@ -9,9 +9,10 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/opt/gateway/scripts/tailscale-reauth-watchdog.sh
-# Worst-case budget: max reauth window (3600s) + fallback `tailscale up`
-# (90s timeout) + prefs/status overhead (~30s). 3900 leaves ~200s margin.
-TimeoutStartSec=3900
+# Worst-case budget: max reauth window (3600s) + netmap-flush restart + verify
+# (~35s) + fallback `tailscale up` (90s) + prefs/status overhead (~30s).
+# 4000 leaves ~240s margin.
+TimeoutStartSec=4000
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=tailscale-reauth-watchdog
