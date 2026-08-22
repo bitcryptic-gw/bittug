@@ -606,6 +606,40 @@ static int do_reauth(int window, int arm_watchdog) {
     return 0;
 }
 
+/* ── logout subcommand ─────────────────────────────────────────────────────── */
+/* Drop the device's Tailscale authentication and reset this gateway's LOCAL
+   auth-tracking state back to a genuine first-boot state. This is a soft,
+   reversible logout: `tailscale logout` deauthenticates the node locally but
+   leaves the machine record in the tailnet admin console (it no longer
+   appears online; stale records are cleaned up by normal node-key expiry).
+   Deliberately does NOT deregister/delete the node from the tailnet — that is
+   an admin-console/API action with a larger blast radius and cannot be done
+   from the device credential alone.
+   Also cancels any pending reauth: a logout supersedes a half-finished user
+   reauth, so it kills any lingering `tailscale up --force-reauth` child and
+   removes the reauth watchdog's state (which would otherwise keep the
+   watchdog armed with nothing to supervise). */
+static int do_logout(void) {
+    /* Drop local auth first. Preserve operator so the node, should it be
+       re-authenticated later via the UI, comes back with the same operator. */
+    char *logout_argv[] = {TAILSCALE_BIN, "logout", NULL};
+    int rc = run(logout_argv);
+
+    /* Clear every piece of local state our backend/wrapper read to decide
+       auth mode, whether or not logout itself returned 0 — we always want a
+       clean slate. */
+    unlink(KEY_TMP);
+    unlink(KEY_FILE);
+    unlink(REAUTH_PID);
+    unlink(REAUTH_STATE);
+    /* Log removal is best-effort only if it's safe: it lives in
+       /var/lib/gateway-ui which is setgid to the service group; a plain
+       unlink from root is fine. */
+    unlink(REAUTH_LOG);
+
+    return rc == 0 ? 0 : (rc > 0 ? rc : 1);
+}
+
 /* ── main ────────────────────────────────────────────────────────────────── */
 
 int main(int argc, char *argv[]) {
@@ -620,7 +654,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (argc < 2) {
-        fprintf(stderr, "ERROR: usage: tailscale-wrapper <auth|set-routes|set-ssh|reauth|reauth-once> [args]\n");
+        fprintf(stderr, "ERROR: usage: tailscale-wrapper <auth|set-routes|set-ssh|reauth|reauth-once|logout> [args]\n");
         return 1;
     }
 
@@ -662,6 +696,19 @@ int main(int argc, char *argv[]) {
         setuid(0);
 
         return do_reauth(window, 0);
+    }
+
+    if (strcmp(subcmd, "logout") == 0) {
+        if (argc != 2) {
+            fprintf(stderr, "ERROR: usage: tailscale-wrapper logout\n");
+            return 1;
+        }
+
+        setgroups(0, NULL);
+        setgid(0);
+        setuid(0);
+
+        return do_logout();
     }
 
     if (strcmp(subcmd, "auth") == 0) {
@@ -730,6 +777,6 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    fprintf(stderr, "ERROR: unknown subcommand '%s' — use auth, set-routes, set-ssh, reauth, or reauth-once\n", subcmd);
+    fprintf(stderr, "ERROR: unknown subcommand '%s' — use auth, set-routes, set-ssh, reauth, reauth-once, or logout\n", subcmd);
     return 1;
 }

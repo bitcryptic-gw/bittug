@@ -478,6 +478,7 @@ html, body {
 
 .input-row   { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
 .action-row  { display: flex; align-items: center; gap: .75rem; margin-top: 1rem; flex-wrap: wrap; }
+.ts-clear-auth-row > #tailscale-logout-confirm { flex-basis: 100%; }
 .mt          { margin-top: 1rem; }
 .mt-sm       { margin-top: .5rem; }
 

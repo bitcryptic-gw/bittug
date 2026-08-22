@@ -1115,6 +1115,11 @@ function renderTailscaleOptions(d) {
 
   const connected = d.status === 'connected' && d.online;
 
+  // Gate the Connect (paste-tagged-key) button on "no active auth of any
+  // kind". auth_active is computed backend-side (tagged key OR user-auth).
+  tsAuthActive = !!d.auth_active;
+  _tsKeyUpdateBtn();
+
   optionsCard.classList.toggle('card-disabled', !connected);
   routingToggle.disabled = !connected;
   sshToggle.disabled = !connected;
@@ -1145,6 +1150,12 @@ function renderTailscaleOptions(d) {
 
 // ── Network — Tailscale Auth ─────────────────────────────────────────────────
 
+// Whether the device currently has any active Tailscale auth (tagged key or a
+// user-authenticated connection). Set by renderTailscaleOptions from the
+// network endpoint's auth_active field; drives the Connect-button gate so a
+// key can't be pasted over existing auth.
+let tsAuthActive = false;
+
 function _tsKeyValidate(key) {
   return /^tskey(-auth)?-[A-Za-z0-9_-]+$/.test(key);
 }
@@ -1153,6 +1164,18 @@ function _tsKeyUpdateBtn() {
   const key = document.getElementById('tailscale-key').value.trim();
   const btn = document.getElementById('btn-tailscale-connect');
   const msg = document.getElementById('tailscale-key-msg');
+  const gated = document.getElementById('tailscale-connect-gated-note');
+
+  // While ANY auth is active the Connect path is gated: pasting a key over a
+  // live connection is unreliable, so the button stays disabled and the user
+  // is told to Clear Tailscale auth first.
+  if (tsAuthActive) {
+    btn.disabled = true;
+    if (gated) gated.classList.remove('hidden');
+    return;
+  }
+  if (gated) gated.classList.add('hidden');
+
   if (!key) {
     btn.disabled = true;
     msg.classList.add('hidden');
@@ -1171,6 +1194,11 @@ function _tsKeyUpdateBtn() {
 async function connectTailscale() {
   const key = document.getElementById('tailscale-key').value.trim();
   if (!_tsKeyValidate(key)) return;
+  if (tsAuthActive) {
+    showResult('tailscale-auth-result', 'Device already has an active Tailscale connection — Clear Tailscale auth first.', true);
+    _tsKeyUpdateBtn();
+    return;
+  }
   const btn = document.getElementById('btn-tailscale-connect');
   btn.disabled = true;
   btn.textContent = 'Connecting…';
@@ -1184,7 +1212,48 @@ async function connectTailscale() {
   } finally {
     btn.disabled = false;
     btn.textContent = 'Connect';
+    _tsKeyUpdateBtn();
   }
+}
+
+// ── Network — Clear Tailscale auth (logout + reset local state) ──────────────
+
+function clearTailscaleAuth() {
+  // Primary button: reveal the destructive confirmation (has its own Confirm
+  // and Cancel). It must stay as the single reveal gate; execution happens on
+  // btn-tailscale-logout-exec.
+  document.getElementById('tailscale-logout-confirm').classList.remove('hidden');
+}
+
+function execClearTailscaleAuth() {
+  const btn = document.getElementById('btn-tailscale-logout');
+  btn.disabled = true;
+  btn.textContent = 'Clearing…';
+  try {
+    api('/api/network/tailscale/logout', 'POST', { confirm: true })
+      .then(() => {
+        showResult('tailscale-logout-result', 'Tailscale auth cleared — device reset to first-boot state.', false);
+        document.getElementById('tailscale-logout-confirm').classList.add('hidden');
+        // Reset the reauth panel state so its success banner/hint no longer
+        // advertise a connection that was just dropped.
+        const pending = document.getElementById('tailscale-reauth-pending');
+        if (pending) pending.classList.add('hidden');
+        const outcome = document.getElementById('tailscale-reauth-outcome');
+        if (outcome) { outcome.classList.add('hidden'); outcome.textContent = ''; }
+        loadNetwork();
+      })
+      .catch(e => {
+        if (e.message !== 'unauthorized') showResult('tailscale-logout-result', e.message, true);
+        btn.disabled = false;
+        btn.textContent = 'Clear Tailscale auth…';
+      });
+  } catch (e) {
+    /* api() may throw synchronously for malformed calls; treated as failure */
+  }
+}
+
+function cancelClearTailscaleAuth() {
+  document.getElementById('tailscale-logout-confirm').classList.add('hidden');
 }
 
 // ── Network — Tailscale Subnet Routing ───────────────────────────────────────
@@ -1338,7 +1407,7 @@ function renderReauthStatus(d) {
     hint.textContent = 'Force a new interactive Tailscale login in the browser. Use this to move this device from tag-authenticated to user-authenticated — required to see nodes shared in from another tailnet. A saved tagged auth key is restored automatically if the browser login isn\'t completed in time.';
     warn.textContent = '⚠ Reauthentication will briefly disconnect Tailscale. If the browser login isn\'t completed within the watchdog window, the saved tagged auth key is restored. Must be initiated from the LAN, not a tunneled session.';
   } else {
-    hint.textContent = 'Sign this device in with your Tailscale account in the browser. The device is not using a tagged auth key, so nothing is lost here and no failover timer applies. Requires an interactive login from a LAN session.';
+    hint.textContent = 'Sign this device in with your Tailscale account in the browser. This device has no tagged auth key configured, so there\'s nothing to fail back to and no timeout applies. Requires an interactive login from a LAN session.';
     warn.textContent = '⚠ Reauthentication will briefly disconnect Tailscale until you complete the login in the browser. Must be initiated from the LAN, not a tunneled session.';
   }
 
@@ -1376,6 +1445,9 @@ function renderReauthStatus(d) {
     timer.textContent = '';
     if (d.status !== 'idle') {
       outcome.classList.remove('hidden');
+      // Give the outcome row breathing room below the button row so it reads
+      // as a distinct line (consistent with spacing elsewhere in the panel).
+      outcome.style.marginTop = '.75rem';
       let label;
       if (d.status === 'success') {
         label = d.has_tagged_key
@@ -1393,6 +1465,7 @@ function renderReauthStatus(d) {
     } else {
       outcome.classList.add('hidden');
       outcome.textContent = '';
+      outcome.style.marginTop = '';
     }
     if (!d.lan_source) {
       lanWarn.textContent = `⚠ This session is NOT on the LAN (${d.lan_reason || 'unknown'}) — re-authentication must be initiated from a LAN session.`;
@@ -2325,6 +2398,14 @@ function wireEvents() {
   // Network — Tailscale auth
   document.getElementById('tailscale-key').addEventListener('input', _tsKeyUpdateBtn);
   document.getElementById('btn-tailscale-connect').addEventListener('click', connectTailscale);
+
+  // Network — Tailscale clear-auth (logout + reset local state)
+  document.getElementById('btn-tailscale-logout').addEventListener('click', clearTailscaleAuth);
+  document.getElementById('btn-tailscale-logout-exec').addEventListener('click', execClearTailscaleAuth);
+  document.getElementById('tailscale-logout-cancel').addEventListener('click', e => {
+    e.preventDefault();
+    cancelClearTailscaleAuth();
+  });
 
   // Network — Tailscale routing toggle (show/hide fields, immediate disable)
   document.getElementById('ts-routing-toggle').addEventListener('change', async function() {

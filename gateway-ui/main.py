@@ -1220,6 +1220,12 @@ def api_network_tailscale(_: Auth):
     if rc4 == 0:
         version = ver_out.splitlines()[0].strip() if ver_out.strip() else "unknown"
 
+    # Whether the device has any active Tailscale auth (tagged key present, or
+    # a user-authenticated connection). Drives the Connect-button gate: pasting
+    # a key over existing auth is unreliable, so the UI disables Connect (and
+    # the backend rejects) whenever this is true.
+    auth_active = _tailscale_auth_active()
+
     if backend_state == "NeedsLogin":
         # Logged out — typically the machine record was deleted from the
         # admin console. Surface the interactive re-auth URL (preserves all
@@ -1231,6 +1237,7 @@ def api_network_tailscale(_: Auth):
             "version": version,
             "auth_url": str(data.get("AuthURL") or ""),
             "auto_reauth_key_present": Path("/etc/gateway/tailscale.key").exists(),
+            "auth_active": auth_active,
         }
 
     if backend_state and backend_state != "Running":
@@ -1239,6 +1246,7 @@ def api_network_tailscale(_: Auth):
             "status": "starting" if backend_state in ("NoState", "Starting") else "disconnected",
             "backend_state": backend_state,
             "version": version,
+            "auth_active": auth_active,
         }
 
     self_info = data.get("Self", {})
@@ -1278,6 +1286,7 @@ def api_network_tailscale(_: Auth):
         "ssh_enabled": ssh_enabled,
         "tailscale_hostname_mismatch": ts_mismatch,
         "tailscale_hostname_mismatch_type": ts_mismatch_type,
+        "auth_active": auth_active,
     }
     if ts_mismatch:
         result["tailscale_hostname_actual"] = ts_hostname_actual
@@ -1297,6 +1306,12 @@ async def api_tailscale_connect(_: Auth, request: Request):
 
     if not Path(_TS_WRAPPER).exists():
         raise HTTPException(status_code=503, detail="tailscale-wrapper not installed — run install-tailscale.sh")
+
+    if _tailscale_auth_active():
+        raise HTTPException(
+            status_code=409,
+            detail="This device already has an active Tailscale connection, so pasting a new key over it would be unreliable. Use Clear Tailscale auth first, then paste a fresh key.",
+        )
 
     rc, out, err = await _run_async([_TS_WRAPPER, "auth", key], timeout=30)
 
@@ -1472,6 +1487,22 @@ def _has_tagged_key() -> bool:
         return TS_TAGGED_KEY.exists() and TS_TAGGED_KEY.stat().st_size > 0
     except OSError:
         return False
+
+
+def _tailscale_auth_active() -> bool:
+    """Whether the device has any active Tailscale authentication — either a
+    persisted tagged key or a currently user-authenticated connection. This is
+    the 'has active auth of any kind' predicate used to gate the Connect
+    (paste-tagged-key) path: pasting a key over existing auth is unreliable
+    (version-dependent `tailscale up --auth-key` behaviour, see the Item 2
+    findings), so it is blocked unless the device is in a genuinely clean /
+    first-boot state. Deliberately no `--force-reauth` is involved — we make
+    the unsafe path unreachable instead of trying to make it safe."""
+    if _has_tagged_key():
+        return True
+    if _tailscale_user_auth_confirmed():
+        return True
+    return False
 
 
 def _reauth_log_tail(lines: int = 20) -> str:
@@ -1661,6 +1692,39 @@ async def api_tailscale_reauth(_: Auth, request: Request):
     return {"ok": True, "auth_url": auth_url, "qr_svg": _qr_svg(auth_url) if auth_url else None,
             "window": window, "status": "pending", "remaining": window,
             "has_tagged_key": has_key}
+
+
+@app.post("/api/network/tailscale/logout")
+async def api_tailscale_logout(_: Auth, request: Request):
+    """Clear Tailscale auth — drop the node's authentication locally and reset
+    this gateway's auth-tracking state to a genuine first-boot state.
+
+    Requires explicit confirmation AND a LAN-origin session. This is a
+    destructive action: it disconnects the device from the tailnet, which
+    severs remote access when the UI is being reached over Tailscale itself —
+    hence the same LAN-origin gate as the reauth trigger.
+
+    Local-only, reversible logout: the node is deauthenticated locally and the
+    persisted tagged key + reauth watchdog state are removed, but the machine
+    record is NOT deleted from the tailnet admin console. See the wrapper's
+    do_logout() for the rationale (deregistering is an admin-console/API action
+    with a larger blast radius)."""
+    body = await request.json()
+    if body.get("confirm") is not True:
+        raise HTTPException(status_code=400, detail="Explicit confirmation required (confirm: true)")
+
+    lan, reason = _request_is_lan(request)
+    if not lan:
+        raise HTTPException(status_code=403, detail=f"Clearing Tailscale auth must be initiated from the LAN — {reason}")
+
+    if not Path(_TS_WRAPPER).exists():
+        raise HTTPException(status_code=503, detail="tailscale-wrapper not installed — run install-tailscale.sh")
+
+    rc, out, err = await _run_async([_TS_WRAPPER, "logout"], timeout=30)
+    if rc != 0:
+        raise HTTPException(status_code=500, detail=err or out or "tailscale logout failed")
+
+    return {"ok": True, "output": out}
 
 
 # ── System / Version ──────────────────────────────────────────────────────────

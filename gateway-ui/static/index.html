@@ -360,7 +360,9 @@
             <p class="hint" style="margin-bottom:.75rem;line-height:1.6">
               Paste an auth key from the Tailscale admin console
               (<strong>tailscale.com/admin/settings/keys</strong>) to connect this
-              device to your tailnet. Re-paste a new key at any time to re-authenticate.
+              device to your tailnet. This only applies on a first-boot device
+              with no active connection — use Clear Tailscale auth first if the
+              device is already connected.
             </p>
             <div class="field-group">
               <label class="field-label" for="tailscale-key">Auth key</label>
@@ -372,6 +374,22 @@
             <div class="action-row">
               <button id="btn-tailscale-connect" class="btn btn-primary" disabled>Connect</button>
               <span id="tailscale-auth-result" class="result-msg"></span>
+            </div>
+            <p class="hint hidden" id="tailscale-connect-gated-note" style="margin-top:.6rem;color:var(--yellow)">
+              This device already has an active Tailscale connection, so a new key
+              can't be pasted over it reliably. Use <strong>Clear Tailscale auth</strong>
+              above to disconnect first, then paste a fresh key.
+            </p>
+            <div class="action-row ts-clear-auth-row">
+              <button id="btn-tailscale-logout" class="btn btn-danger btn-sm">Clear Tailscale auth…</button>
+              <span id="tailscale-logout-result" class="result-msg"></span>
+              <div id="tailscale-logout-confirm" class="hidden">
+                <span class="warn-text">⚠ This disconnects the device from the tailnet and resets it to first-boot (unauthenticated) state. If you're reaching this UI over Tailscale, this severs your connection. The login URL/QR download that follows won't work until you connect again.</span>
+                <div class="action-row">
+                  <button id="btn-tailscale-logout-exec" class="btn btn-danger">Confirm clear</button>
+                  <a href="#" id="tailscale-logout-cancel" class="confirm-cancel">Cancel</a>
+                </div>
+              </div>
             </div>
           </div>
         </div>
