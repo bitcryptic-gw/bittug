@@ -126,19 +126,34 @@ done
 if ! id -u gateway-ui >/dev/null 2>&1; then
     # System account: no login shell, no home (bootstrap.sh creates
     # /var/lib/gateway-ui later in this script).
-    ARGS=(--system --no-create-home --shell /usr/sbin/nologin)
+    #
+    # --gid gateway-ui is REQUIRED: Debian's useradd default (USERGROUPS_ENAB
+    # yes) would otherwise try to create a private group named 'gateway-ui' for
+    # this user. That group was already created on purpose directly above, so
+    # the private-group attempt collides with it and useradd refuses outright.
+    # Pointing the primary gid at the existing group lets the account share it
+    # instead of colliding. This happened on fresh flashes and failed the very
+    # step meant to fix that failure.
+    ARGS=(--system --gid gateway-ui --no-create-home --shell /usr/sbin/nologin)
     if [ -n "$SUPP_GROUPS" ]; then
         ARGS+=(--groups "$SUPP_GROUPS")
     fi
     if useradd "${ARGS[@]}" gateway-ui; then
         green "Created system user: gateway-ui (groups: ${SUPP_GROUPS:-none})"
     else
-        warn "Failed to create user gateway-ui — continuing (further steps guarded)"
+        echo "ERROR: useradd failed to create gateway-ui user — refusing to continue." >&2
+        echo "       The gateway-ui web service and most provisioning steps depend on it." >&2
+        exit 1
     fi
 fi
 
-if ! id gateway-ui >/dev/null 2>&1 && ! getent group gateway-ui >/dev/null 2>&1; then
-    echo "ERROR: gateway-ui account could not be created — refusing to continue." >&2
+# Post-condition: the account MUST now exist before any later step runs. This
+# deliberately checks the USER specifically (not group-or-user): a leftover
+# gateway-ui group without the user would otherwise satisfy a group-level check
+# and let the whole script continue on a broken foundation, failing later in the
+# python step with a much less obvious error. Fail fast at the point of failure.
+if ! id -u gateway-ui >/dev/null 2>&1; then
+    echo "ERROR: gateway-ui user could not be created — refusing to continue." >&2
     echo "       The gateway-ui web service and most provisioning steps depend on it." >&2
     exit 1
 fi
