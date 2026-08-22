@@ -407,7 +407,13 @@ if [ -f "$REQS" ]; then
         pkg_name="${pkg_name%%\[*}"
         [ -z "$pkg_name" ] && continue
         req_ver="${line##*==}"
-        inst_ver=$(pip3 show "$pkg_name" 2>/dev/null | awk '/^Version: / {print $2}')
+        # pip3 show exits 1 when the package is not installed (the NORMAL state on a
+        # fresh device with nothing installed yet). Under set -euo pipefail that
+        # would otherwise reach the assignment and kill the whole script. The
+        # trailing `|| true` makes the expected "not installed" case a benign empty
+        # string instead of a fatal pipefail. Matches the `|| echo ""`/`|| true`
+        # guard style used for expected-nonzero commands elsewhere in this script.
+        inst_ver=$(pip3 show "$pkg_name" 2>/dev/null | awk '/^Version: / {print $2}' || true)
         if [ -z "$inst_ver" ] || [ "$inst_ver" != "$req_ver" ]; then
             ALL_SATISFIED=false
             break
