@@ -125,7 +125,25 @@ if [ ! -d "$REPO_DIR" ]; then
     echo "[firstrun] Cloning gateway repo..."
     mkdir -p "$REPO_DIR"
     chown "${PRIMARY_USER}:${PRIMARY_USER}" "$REPO_DIR"
-    sudo -u "$PRIMARY_USER" git clone "$REPO_URL" "$REPO_DIR"
+    # The clone runs over HTTPS and can transiently fail against a stale boot
+    # clock (TLS cert "not before" check) or a still-settling network, even
+    # with time-sync/network-online gating. Retry briefly with backoff instead
+    # of failing the whole provisioning run on the first attempt.
+    CLONE_OK=false
+    for attempt in 1 2 3 4 5; do
+        if sudo -u "$PRIMARY_USER" git clone "$REPO_URL" "$REPO_DIR"; then
+            CLONE_OK=true
+            break
+        fi
+        echo "[firstrun] git clone attempt ${attempt}/5 failed — waiting and retrying..." >&2
+        sleep 10
+    done
+    if [ "$CLONE_OK" != true ]; then
+        echo "[firstrun] ERROR: git clone failed after 5 attempts." >&2
+        echo "[firstrun] Check network connectivity and that the clock is correct (date)." >&2
+        echo "[firstrun] NOTE: if this is a clock issue, a successful NTP sync + reboot usually fixes it." >&2
+        exit 1
+    fi
     echo "[firstrun] Repo cloned to ${REPO_DIR}"
 fi
 echo "[firstrun] $(date '+%H:%M:%S') Completed: repo clone"

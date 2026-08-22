@@ -261,6 +261,46 @@ else
     echo "[build] cloud-init=disabled already present or cmdline.txt not found"
 fi
 
+# ── 5c. Enable systemd-time-wait-sync.service (honest time-sync.target) ────────
+# gateway-firstrun.service Requires=time-sync.target. On stock Raspberry Pi OS,
+# time-sync.target is satisfied vacuously: nothing depends on an actual clock
+# sync, so it resolves instantly while the device clock is still wrong (a fresh
+# boot has no RTC and carries a stale/default epoch until NTP completes). That
+# let gateway-firstrun.service start with the clock in the past, which makes
+# `git clone` over HTTPS fail TLS cert validation ("server verification failed:
+# certificate error" — GitHub's current cert is not valid as of the stale date)
+# and defeats the whole fresh-flash flow.
+#
+# Enabling systemd-time-wait-sync.service makes time-sync.target genuinely wait:
+# the unit (in the base image) declares Before=time-sync.target and its oneshot
+# ExecStart blocks until the kernel clock is reported synchronized, so the clock
+# is confirmed-correct (or time-sync blocks) before clone can run.
+#
+# Canonical enablement: the unit's [Install] is WantedBy=sysinit.target, and its
+# own [Unit] has Before=time-sync.target. Matching what `systemctl enable`
+# writes, place the link in sysinit.target.wants (NOT time-sync.target.wants) —
+# verified against the real unit file in the 2026-06-18 raspios trixie base
+# image. Confirmed pre-existing: systemd-timesyncd is enabled and shipped, and
+# /etc/systemd/system/time-sync.target.wants/ does not exist in the base image.
+echo ""
+echo "--- Enabling systemd-time-wait-sync.service ---"
+TIME_WAIT_SRC="/lib/systemd/system/systemd-time-wait-sync.service"
+TIME_WAIT_DIR="${WORKDIR}/mnt/root/etc/systemd/system/sysinit.target.wants"
+TIME_WAIT_DST="${TIME_WAIT_DIR}/systemd-time-wait-sync.service"
+
+if [ -f "${WORKDIR}/mnt/root${TIME_WAIT_SRC}" ]; then
+    mkdir -p "$TIME_WAIT_DIR"
+    if [ ! -L "$TIME_WAIT_DST" ]; then
+        ln -sf "$TIME_WAIT_SRC" "$TIME_WAIT_DST"
+        echo "[build] Enabled systemd-time-wait-sync.service"
+    else
+        echo "[build] systemd-time-wait-sync.service already enabled"
+    fi
+else
+    echo "[build] WARNING: systemd-time-wait-sync.service not found in base image"
+    echo "[build] time-sync.target may resolve vacuously — gateway-firstrun.service may fire before clock sync completes"
+fi
+
 # ── 6. Merge config.txt ───────────────────────────────────────────────────────
 echo ""
 echo "--- Merging config.txt ---"
