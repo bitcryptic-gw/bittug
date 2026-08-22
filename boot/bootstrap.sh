@@ -79,7 +79,72 @@ apt-get install -y -qq --no-install-recommends \
 green "System packages installed"
 echo "[firstrun] $(date '+%H:%M:%S') Completed: system packages"
 
-# ── 2. Repo clone ────────────────────────────────────────────────────────────
+# ── 2. gateway-ui system user/group ───────────────────────────────────────────
+#
+# Every service that ships in this image (gateway-ui.service,
+# gateway-platform.service via first-boot.sh, plus bootstrap.sh's own
+# /var/lib/gateway-ui, /etc/gateway-ui, and OTA logic) assumes the gateway-ui
+# system account exists. On a genuinely fresh device it does not — and if it is
+# never created here, set -e makes every later `-g gateway-ui` / `chown
+# gateway-ui` / `User=gateway-ui` hard-fail. That is exactly the fresh-boot
+# provisioning failure this block fixes: previously the account was only ever
+# created by sync-provisioning.sh, which runs via gateway-platform.service —
+# which is itself installed later in this script and so never got the chance on
+# a fresh flash.
+#
+# Runs AFTER system packages so the `i2c` group (created by i2c-tools) is
+# guaranteed present before we grant it as a supplementary group. Idempotent
+# and non-fatal-safe: if the user/group already exist we skip creation
+# (mirroring the pre-existing `id gateway-ui && getent group` guards used
+# elsewhere in this script). A second run, OTA re-run, or --force re-run
+# must not clobber an existing account.
+
+echo ""
+echo "[firstrun] $(date '+%H:%M:%S') Starting: gateway-ui account"
+echo "--- gateway-ui Account ---"
+
+if ! getent group gateway-ui >/dev/null 2>&1; then
+    if groupadd --system gateway-ui; then
+        green "Created system group: gateway-ui"
+    else
+        warn "Failed to create group gateway-ui — continuing (further steps guarded)"
+    fi
+fi
+
+# Supplementary groups, including only those that actually exist. systemd-journal
+# always exists; i2c exists once i2c-tools is installed (it is, above). Filtering
+# prevents a single missing group from failing the whole useradd.
+SUPP_GROUPS=""
+for g in systemd-journal i2c; do
+    if getent group "$g" >/dev/null 2>&1; then
+        SUPP_GROUPS="${SUPP_GROUPS}${SUPP_GROUPS:+,}${g}"
+    else
+        warn "Supplementary group '${g}' not present — omitting from gateway-ui"
+    fi
+done
+
+if ! id -u gateway-ui >/dev/null 2>&1; then
+    # System account: no login shell, no home (bootstrap.sh creates
+    # /var/lib/gateway-ui later in this script).
+    ARGS=(--system --no-create-home --shell /usr/sbin/nologin)
+    if [ -n "$SUPP_GROUPS" ]; then
+        ARGS+=(--groups "$SUPP_GROUPS")
+    fi
+    if useradd "${ARGS[@]}" gateway-ui; then
+        green "Created system user: gateway-ui (groups: ${SUPP_GROUPS:-none})"
+    else
+        warn "Failed to create user gateway-ui — continuing (further steps guarded)"
+    fi
+fi
+
+if ! id gateway-ui >/dev/null 2>&1 && ! getent group gateway-ui >/dev/null 2>&1; then
+    echo "ERROR: gateway-ui account could not be created — refusing to continue." >&2
+    echo "       The gateway-ui web service and most provisioning steps depend on it." >&2
+    exit 1
+fi
+echo "[firstrun] $(date '+%H:%M:%S') Completed: gateway-ui account"
+
+# ── 3. Repo clone ────────────────────────────────────────────────────────────
 
 echo ""
 echo "[firstrun] $(date '+%H:%M:%S') Starting: repo clone"
@@ -116,10 +181,15 @@ echo "[firstrun] $(date '+%H:%M:%S') Completed: repo clone"
 # Non-recursive — anyone/ and urnetwork/ subdirectories get their own
 # ownership from sync-provisioning.sh (anyone/) or Docker bind-mounts
 # (urnetwork/) and must remain root:root.
+if ! getent group gateway-ui >/dev/null 2>&1; then
+    echo "ERROR: group 'gateway-ui' unavailable while creating /var/lib/gateway-ui." >&2
+    echo "       This should have been created in the 'gateway-ui account' step above." >&2
+    exit 1
+fi
 install -d -m 2775 -o root -g gateway-ui /var/lib/gateway-ui
 green "Created /var/lib/gateway-ui (root:gateway-ui 2775)"
 
-# ── 3. Timezone ──────────────────────────────────────────────────────────────
+# ── 4. Timezone ──────────────────────────────────────────────────────────────
 
 echo ""
 echo "[firstrun] $(date '+%H:%M:%S') Starting: timezone"
@@ -144,7 +214,7 @@ else
 fi
 echo "[firstrun] $(date '+%H:%M:%S') Completed: timezone"
 
-# ── 4. boot/config.txt ───────────────────────────────────────────────────────
+# ── 5. boot/config.txt ───────────────────────────────────────────────────────
 
 echo ""
 echo "[firstrun] $(date '+%H:%M:%S') Starting: boot config"
@@ -166,7 +236,7 @@ else
 fi
 echo "[firstrun] $(date '+%H:%M:%S') Completed: boot config"
 
-# ── 5. Systemd units ─────────────────────────────────────────────────────────
+# ── 6. Systemd units ─────────────────────────────────────────────────────────
 
 echo ""
 echo "[firstrun] $(date '+%H:%M:%S') Starting: systemd units"
@@ -187,7 +257,7 @@ systemctl daemon-reload
 green "Systemd units installed and enabled"
 echo "[firstrun] $(date '+%H:%M:%S') Completed: systemd units"
 
-# ── 6. Tailscale install ─────────────────────────────────────────────────────
+# ── 7. Tailscale install ─────────────────────────────────────────────────────
 
 echo ""
 echo "[firstrun] $(date '+%H:%M:%S') Starting: tailscale"
@@ -206,7 +276,7 @@ else
 fi
 echo "[firstrun] $(date '+%H:%M:%S') Completed: tailscale"
 
-# ── 7. Wingbits deps ─────────────────────────────────────────────────────────
+# ── 8. Wingbits deps ─────────────────────────────────────────────────────────
 
 echo ""
 echo "[firstrun] $(date '+%H:%M:%S') Starting: wingbits deps"
@@ -219,7 +289,7 @@ else
 fi
 echo "[firstrun] $(date '+%H:%M:%S') Completed: wingbits deps"
 
-# ── 8. Helium gateway binary ───────────────────────────────────────────────
+# ── 9. Helium gateway binary ───────────────────────────────────────────────
 
 echo ""
 echo "[firstrun] $(date '+%H:%M:%S') Starting: helium gateway"
@@ -232,7 +302,7 @@ else
 fi
 echo "[firstrun] $(date '+%H:%M:%S') Completed: helium gateway"
 
-# ── 9. Gateway version ──────────────────────────────────────────────────────
+# ── 10. Gateway version ──────────────────────────────────────────────────────
 
 echo ""
 echo "[firstrun] $(date '+%H:%M:%S') Starting: gateway version"
@@ -243,7 +313,7 @@ chmod 644 /etc/gateway-version
 green "Wrote /etc/gateway-version: ${VERSION_TAG}"
 echo "[firstrun] $(date '+%H:%M:%S') Completed: gateway version"
 
-# ── 10. Setuid wrappers (single source of truth) ────────────────────────────
+# ── 11. Setuid wrappers (single source of truth) ────────────────────────────
 
 echo ""
 echo "[firstrun] $(date '+%H:%M:%S') Starting: setuid wrappers"
@@ -256,7 +326,7 @@ else
 fi
 echo "[firstrun] $(date '+%H:%M:%S') Completed: setuid wrappers"
 
-# ── 11. Gateway UI config files ─────────────────────────────────────────────────────────
+# ── 12. Gateway UI config files ─────────────────────────────────────────────────────────
 
 echo ""
 echo "[firstrun] $(date '+%H:%M:%S') Starting: gateway UI config"
@@ -306,7 +376,7 @@ else
 fi
 echo "[firstrun] $(date '+%H:%M:%S') Completed: gateway UI config"
 
-# ── 12. Python dependencies ───────────────────────────────────────────────────
+# ── 13. Python dependencies ───────────────────────────────────────────────────
 
 echo ""
 echo "[firstrun] $(date '+%H:%M:%S') Starting: python dependencies"
@@ -340,6 +410,28 @@ else
 fi
 echo "[firstrun] $(date '+%H:%M:%S') Completed: python dependencies"
 
+# --- Install provisioning-status login notice ---
+# Installs a /etc/profile.d/ script (copied from the repo at provisioning time)
+# that prints a prominent banner on every interactive login while first-boot
+# provisioning is incomplete (i.e. /etc/gateway-provisioned is missing). This
+# surfaces a failed / interrupted run immediately instead of leaving a first-run
+# user with a device that just quietly lacks its web UI, token and units.
+# The script is a read-only, always-exit-0 checker — no failure mode here.
+# Non-fatal: if it cannot be placed, the device still works; we just warn.
+echo "[firstrun] $(date '+%H:%M:%S') Starting: provisioning status notice"
+PROV_SRC="${REPO_DIR}/boot/gateway-provisioning-check.sh"
+PROV_DST="/etc/profile.d/99-gateway-provisioning.sh"
+if [ -f "$PROV_SRC" ]; then
+    if cp "$PROV_SRC" "$PROV_DST" && chmod 644 "$PROV_DST"; then
+        green "Installed provisioning-status login notice"
+    else
+        warn "Failed to install provisioning-status login notice (non-fatal)"
+    fi
+else
+    warn "gateway-provisioning-check.sh not found in repo — skipping login notice"
+fi
+echo "[firstrun] $(date '+%H:%M:%S') Completed: provisioning status notice"
+
 # --- Write provisioning sentinel ---
 # Must be written only after ALL provisioning steps above have
 # completed successfully.  set -e (line 4) guarantees a failure
@@ -348,7 +440,7 @@ echo "[firstrun] $(date '+%H:%M:%S') Starting: write sentinel"
 touch "$SENTINEL"
 echo "[firstrun] $(date '+%H:%M:%S') Completed: write sentinel"
 
-# ── 13. Post-provisioning summary ─────────────────────────────────────────────
+# ── 14. Post-provisioning summary ─────────────────────────────────────────────
 
 echo ""
 echo "============================================"
