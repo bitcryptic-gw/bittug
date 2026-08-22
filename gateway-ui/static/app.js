@@ -1120,6 +1120,15 @@ function renderTailscaleOptions(d) {
   tsAuthActive = !!d.auth_active;
   _tsKeyUpdateBtn();
 
+  // Unconditionally return the Clear Tailscale auth button to its resting
+  // state on every render pass, regardless of which action triggered this
+  // refresh. The button's loading label/disabled state must never depend on
+  // the Clear action's own request/response callback having run last — this
+  // is the same category of bug as the earlier reauth "Triggering…" fix, and
+  // it's what leaves the button stuck on "Clearing…" after a subsequent
+  // Connect action re-renders the panel.
+  resetClearAuthButton();
+
   optionsCard.classList.toggle('card-disabled', !connected);
   routingToggle.disabled = !connected;
   sshToggle.disabled = !connected;
@@ -1218,6 +1227,13 @@ async function connectTailscale() {
 
 // ── Network — Clear Tailscale auth (logout + reset local state) ──────────────
 
+function resetClearAuthButton() {
+  const btn = document.getElementById('btn-tailscale-logout');
+  if (!btn) return;
+  btn.textContent = 'Clear Tailscale auth…';
+  btn.disabled = false;
+}
+
 function clearTailscaleAuth() {
   // Primary button: reveal the destructive confirmation (has its own Confirm
   // and Cancel). It must stay as the single reveal gate; execution happens on
@@ -1240,15 +1256,18 @@ function execClearTailscaleAuth() {
         if (pending) pending.classList.add('hidden');
         const outcome = document.getElementById('tailscale-reauth-outcome');
         if (outcome) { outcome.classList.add('hidden'); outcome.textContent = ''; }
+        // Restore the Clear button to its resting state immediately (not just
+        // relying on the render pass), then refresh network state.
+        resetClearAuthButton();
         loadNetwork();
       })
       .catch(e => {
         if (e.message !== 'unauthorized') showResult('tailscale-logout-result', e.message, true);
-        btn.disabled = false;
-        btn.textContent = 'Clear Tailscale auth…';
+        resetClearAuthButton();
       });
   } catch (e) {
     /* api() may throw synchronously for malformed calls; treated as failure */
+    resetClearAuthButton();
   }
 }
 
