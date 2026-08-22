@@ -1297,9 +1297,13 @@ function showReauthPending(d) {
 function updateReauthTimer(d) {
   const timer = document.getElementById('tailscale-reauth-timer');
   if (d.status === 'pending') {
-    const m = Math.floor(d.remaining / 60);
-    const s = d.remaining % 60;
-    timer.textContent = `Watchdog window: ${m}m ${s}s remaining — if the browser login isn't completed, the saved tagged auth key is restored.`;
+    if (d.has_tagged_key) {
+      const m = Math.floor(d.remaining / 60);
+      const s = d.remaining % 60;
+      timer.textContent = `Watchdog window: ${m}m ${s}s remaining — if the browser login isn't completed, the saved tagged auth key is restored.`;
+    } else {
+      timer.textContent = 'Waiting for you to complete the login in the browser.';
+    }
   } else {
     timer.textContent = '';
   }
@@ -1326,6 +1330,18 @@ function renderReauthStatus(d) {
   const outcome = document.getElementById('tailscale-reauth-outcome');
   const lanWarn = document.getElementById('tailscale-reauth-lan-warning');
 
+  // Reflect which regime we're in (set on every render; the backend tells us
+  // whether a tagged auth key exists to fall back to).
+  const hint = document.getElementById('tailscale-reauth-hint');
+  const warn = document.getElementById('tailscale-reauth-confirm-warn');
+  if (d.has_tagged_key) {
+    hint.textContent = 'Force a new interactive Tailscale login in the browser. Use this to move this device from tag-authenticated to user-authenticated — required to see nodes shared in from another tailnet. A saved tagged auth key is restored automatically if the browser login isn\'t completed in time.';
+    warn.textContent = '⚠ Reauthentication will briefly disconnect Tailscale. If the browser login isn\'t completed within the watchdog window, the saved tagged auth key is restored. Must be initiated from the LAN, not a tunneled session.';
+  } else {
+    hint.textContent = 'Sign this device in with your Tailscale account in the browser. The device is not using a tagged auth key, so nothing is lost here and no failover timer applies. Requires an interactive login from a LAN session.';
+    warn.textContent = '⚠ Reauthentication will briefly disconnect Tailscale until you complete the login in the browser. Must be initiated from the LAN, not a tunneled session.';
+  }
+
   if (d.status === 'pending') {
     pending.classList.remove('hidden');
     outcome.classList.add('hidden');
@@ -1348,18 +1364,31 @@ function renderReauthStatus(d) {
     }
   } else {
     btn.classList.remove('hidden');
-    // Allow re-auth again once a previous attempt has resolved (idle,
-    // success, fallback) — only block while one is actually pending.
-    btn.disabled = d.status === 'pending' || !d.lan_source;
+    // A resolved re-auth (success/fallback) must put the button back to its
+    // resting state — never leave it stuck on "Triggering…" (or the armed
+    // "Confirm re-auth?" text) that it had during the attempt. The countdown
+    // display is cleared here too so nothing stale lingers alongside success.
+    btn.textContent = 'Re-authenticate…';
+    btn.disabled = !d.lan_source;
+    btn.title = '';
     pending.classList.add('hidden');
+    const timer = document.getElementById('tailscale-reauth-timer');
+    timer.textContent = '';
     if (d.status !== 'idle') {
       outcome.classList.remove('hidden');
-      const labels = {
-        success: '✅ User re-auth complete — connection is user-authenticated.',
-        fallback: '⚠️ Re-auth window elapsed — restored the saved tagged auth key.',
-        'fallback-failed': '❌ Re-auth failed and the tagged-key fallback failed. Check /etc/gateway/tailscale.key.',
-      };
-      outcome.textContent = labels[d.status] || `Re-auth outcome: ${d.status}`;
+      let label;
+      if (d.status === 'success') {
+        label = d.has_tagged_key
+          ? '✅ User re-auth complete — connection is user-authenticated.'
+          : '✅ Authenticated — connection is user-authenticated.';
+      } else if (d.status === 'fallback') {
+        label = '⚠️ Re-auth window elapsed — restored the saved tagged auth key.';
+      } else if (d.status === 'fallback-failed') {
+        label = '❌ Re-auth failed and the tagged-key fallback failed. Check /etc/gateway/tailscale.key.';
+      } else {
+        label = `Re-auth outcome: ${d.status}`;
+      }
+      outcome.textContent = label;
       outcome.className = 'result-msg ' + (d.status === 'success' ? 'result-ok' : 'result-error');
     } else {
       outcome.classList.add('hidden');

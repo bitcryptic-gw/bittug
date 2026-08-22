@@ -410,7 +410,7 @@
         <div class="card" id="tailscale-reauth-card">
           <div class="card-header">Re-authenticate (user login)</div>
           <div class="card-body">
-            <p class="hint" style="margin-bottom:.75rem;line-height:1.6">
+            <p class="hint" style="margin-bottom:.75rem;line-height:1.6" id="tailscale-reauth-hint">
               Force a new interactive Tailscale login in the browser. Use this
               to move this device from tag-authenticated to
               user-authenticated — required to see nodes shared in from another
@@ -422,7 +422,7 @@
               <span id="tailscale-reauth-result" class="result-msg"></span>
             </div>
             <div id="tailscale-reauth-confirm" class="hidden">
-              <span class="warn-text">⚠ Reauthentication will briefly disconnect Tailscale. Must be initiated from the LAN, not a tunneled session.</span>
+              <span class="warn-text" id="tailscale-reauth-confirm-warn">⚠ Reauthentication will briefly disconnect Tailscale. Must be initiated from the LAN, not a tunneled session.</span>
               <div class="action-row">
                 <button id="btn-tailscale-reauth-exec" class="btn btn-danger">Confirm re-auth</button>
                 <a href="#" id="tailscale-reauth-cancel" class="confirm-cancel">Cancel</a>

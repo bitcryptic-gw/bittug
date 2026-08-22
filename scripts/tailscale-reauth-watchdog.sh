@@ -36,6 +36,11 @@ KEY_FILE="/etc/gateway/tailscale.key"
 TAILSCALE_BIN="/usr/bin/tailscale"
 SYSTEMCTL_BIN="/usr/bin/systemctl"
 SLEEP_STEP=10
+# After the window elapses, keep re-checking user-auth state for this many
+# seconds before committing to a tagged-key revert. Guards against a transient
+# false-negative read exactly at the deadline (mid-netmap-refresh, --force-reauth
+# teardown race) silently reverting a working user-authenticated connection.
+FALLBACK_CONFIRM_TOTAL=30
 
 log() { echo "[tailscale-reauth-watchdog] $*" | tee -a "$LOG_FILE"; }
 
@@ -156,7 +161,10 @@ now=$(date +%s)
 
 # Wait out the remaining window. Re-check the state file each sleep step so an
 # externally-cancelled reauth (state file removed / status changed) stops the
-# wait immediately.
+# wait immediately. A user-authenticated connection that lands mid-window is
+# settled EARLY — the state flips to success the moment tailscaled confirms it
+# (Running, online, no ACL tags), so a completed login no longer has to wait
+# out the whole watchdog window before the UI reflects success.
 if [ "$now" -lt "$deadline" ]; then
     remaining=$((deadline - now))
     log "window open — waiting ${remaining}s for interactive user login to complete"
@@ -168,14 +176,41 @@ if [ "$now" -lt "$deadline" ]; then
         if [ "$(read_state_field status "pending")" != "pending" ]; then
             exit 0
         fi
+        if user_auth_confirmed; then
+            log "SUCCESS: user-authenticated connection established during window (Running, online, no ACL tags)"
+            kill_pending_reauth
+            flush_netmap
+            write_status "success"
+            exit 0
+        fi
         sleep "$SLEEP_STEP"
     done
 fi
 
 log "window elapsed — checking for user-authenticated connection"
 
+# ── Fallback confirmation — retried, not a single shot ───────────────────────
+# We may have just crossed the deadline at the exact moment tailscaled is
+# mid-netmap-refresh after a successful reauth: BackendState can briefly read
+# as non-Running, Self.Online can briefly lag, or the lingering --force-reauth
+# teardown can race the check. Committing to a tagged-key revert off ONE such
+# read would silently kick a working user-authenticated node back onto a tag.
+# So before falling back we re-verify with retries across a short window; only
+# if the connection stays user-AUTH-NOT-confirmed throughout do we revert.
+if ! user_auth_confirmed; then
+    log "user-auth NOT confirmed at deadline — re-checking for up to ${FALLBACK_CONFIRM_TOTAL}s before falling back"
+    waited=0
+    while [ "$waited" -lt "$FALLBACK_CONFIRM_TOTAL" ]; do
+        if user_auth_confirmed; then
+            break
+        fi
+        sleep "$SLEEP_STEP"
+        waited=$((waited + SLEEP_STEP))
+    done
+fi
+
 if user_auth_confirmed; then
-    log "SUCCESS: user-authenticated connection established (Running, online, no ACL tags)"
+    log "SUCCESS: user-authenticated connection confirmed after deadline re-check (Running, online, no ACL tags)"
     kill_pending_reauth
     flush_netmap
     write_status "success"

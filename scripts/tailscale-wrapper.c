@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <signal.h>
 #include <time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -414,6 +415,47 @@ static int reauth_in_progress(void) {
            strstr(buf, "\"status\": \"pending\"") != NULL;
 }
 
+/* A reauth (watchdog-backed or user-auth-only) is in flight whenever a live
+   detached `tailscale up --force-reauth` process still exists on disk as our
+   recorded PID. This is the only in-progress signal for the user-auth-only
+   path, which deliberately writes no state file. A still-alive process is NOT
+   treated as in-flight once tailscaled is back to a healthy Running+online
+   state: with the known upstream `--force-reauth` hang it can linger after a
+   successful login, and it must not spuriously block a future re-auth. (The
+   Running+online gate is deliberately conservative here — the authoritative
+   user-auth determination lives in the watchdog shell and the FastAPI status
+   endpoint, which both use jq/JSON; this is only a blocking heuristic.) */
+static int node_running_online(void) {
+    static char buf[16384];
+    char *argv[] = {TAILSCALE_BIN, "status", "--json", NULL};
+    if (run_capture(argv, buf, sizeof(buf)) != 0 || buf[0] == '\0')
+        return 0;
+    if (strstr(buf, "\"BackendState\":\"Running\"") == NULL &&
+        strstr(buf, "\"BackendState\": \"Running\"") == NULL)
+        return 0;
+    if (strstr(buf, "\"Online\":true") == NULL && strstr(buf, "\"Online\": true") == NULL)
+        return 0;
+    return 1;
+}
+
+static int reauth_agent_running(void) {
+    FILE *f = fopen(REAUTH_PID, "r");
+    if (!f)
+        return 0;
+    char buf[32];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    long pid = strtol(buf, NULL, 10);
+    if (pid <= 1)
+        return 0;
+    if (kill((pid_t)pid, 0) != 0)
+        return 0;
+    /* A live CLI is only "in-flight" if the node isn't already healthy again
+       (protects against the lingering-hang scenario above). */
+    return !node_running_online();
+}
+
 /* Spawn argv as a detached background process. Redirects its stdin to
    /dev/null and stdout/stderr to logpath (0644 so the gateway-ui status
    endpoint can read the log), writes the child PID to pidpath. Returns 0 on
@@ -453,8 +495,19 @@ static int spawn_detached(char *const argv[], const char *pidpath, const char *l
     return 0;
 }
 
-static int do_reauth(int window) {
-    if (reauth_in_progress()) {
+/* Interactive/browser reauth. `arm_watchdog` selects the failover behaviour:
+ *   - true  (the "reauth" subcommand): write a pending state file and arm
+ *            tailscale-reauth-watchdog.service so a timed fallback to the
+ *            saved tagged auth key restores the connection if the login never
+ *            completes. Only meaningful when a tagged auth key exists to
+ *            revert to.
+ *   - false (the "reauth-once" subcommand): a pure user-auth with no tagged
+ *            key involved — nothing to revert to, so no state file and no
+ *            watchdog are written/armed at all. The UI reads success directly
+ *            from tailscaled (Running + online + no ACL tags).
+ */
+static int do_reauth(int window, int arm_watchdog) {
+    if (reauth_in_progress() || reauth_agent_running()) {
         fprintf(stderr, "ERROR: a reauthentication is already in progress — wait for it to complete or fall back\n");
         return 1;
     }
@@ -514,19 +567,24 @@ static int do_reauth(int window) {
     long now = (long)time(NULL);
 
     /* Write pending state BEFORE spawning so the watchdog can act even if the
-       spawn or arming step below fails partway. */
-    FILE *sf = fopen(REAUTH_STATE, "w");
-    if (!sf) {
-        fprintf(stderr, "ERROR: cannot write %s: %s\n", REAUTH_STATE, strerror(errno));
-        return 1;
+       spawn or arming step below fails partway. Only done when a watchdog is
+       being armed (tagged-key present); the user-auth-only path writes nothing
+       — there is no state machine to drive and no watchdog to fall back on. */
+    if (arm_watchdog) {
+        FILE *sf = fopen(REAUTH_STATE, "w");
+        if (!sf) {
+            fprintf(stderr, "ERROR: cannot write %s: %s\n", REAUTH_STATE, strerror(errno));
+            return 1;
+        }
+        fprintf(sf, "{\"status\":\"pending\",\"triggered_at\":%ld,\"window\":%d,\"deadline\":%ld}\n",
+                now, window, now + (long)window);
+        fclose(sf);
+        chmod(REAUTH_STATE, 0644);
     }
-    fprintf(sf, "{\"status\":\"pending\",\"triggered_at\":%ld,\"window\":%d,\"deadline\":%ld}\n",
-            now, window, now + (long)window);
-    fclose(sf);
-    chmod(REAUTH_STATE, 0644);
 
     if (spawn_detached(up_argv, REAUTH_PID, REAUTH_LOG) != 0) {
-        unlink(REAUTH_STATE);
+        if (arm_watchdog)
+            unlink(REAUTH_STATE);
         return 1;
     }
     chmod(REAUTH_PID, 0644);
@@ -534,14 +592,17 @@ static int do_reauth(int window) {
        gateway-ui) and the gateway-ui FastAPI process appends to it. */
     chmod(REAUTH_LOG, 0664);
 
-    /* Arm the watchdog: independent systemd oneshot that survives this UI's
-       own connection being severed by the reauth it supervises. */
-    char *ctl_argv[] = {SYSTEMCTL_BIN, "start", "--no-block", REAUTH_WATCHDOG, NULL};
-    int rc = run(ctl_argv);
-    if (rc != 0)
-        fprintf(stderr, "WARNING: failed to start %s (exit %d) — watchdog not armed\n", REAUTH_WATCHDOG, rc);
-
-    fprintf(stderr, "reauthentication triggered (window %ds)\n", window);
+    if (arm_watchdog) {
+        /* Arm the watchdog: independent systemd oneshot that survives this
+           UI's own connection being severed by the reauth it supervises. */
+        char *ctl_argv[] = {SYSTEMCTL_BIN, "start", "--no-block", REAUTH_WATCHDOG, NULL};
+        int rc = run(ctl_argv);
+        if (rc != 0)
+            fprintf(stderr, "WARNING: failed to start %s (exit %d) — watchdog not armed\n", REAUTH_WATCHDOG, rc);
+        fprintf(stderr, "reauthentication triggered (window %ds)\n", window);
+    } else {
+        fprintf(stderr, "user reauthentication triggered (no tagged key — no watchdog failover)\n");
+    }
     return 0;
 }
 
@@ -559,7 +620,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (argc < 2) {
-        fprintf(stderr, "ERROR: usage: tailscale-wrapper <auth|set-routes|set-ssh|reauth> [args]\n");
+        fprintf(stderr, "ERROR: usage: tailscale-wrapper <auth|set-routes|set-ssh|reauth|reauth-once> [args]\n");
         return 1;
     }
 
@@ -581,7 +642,26 @@ int main(int argc, char *argv[]) {
         setgid(0);
         setuid(0);
 
-        return do_reauth(window);
+        return do_reauth(window, 1);
+    }
+
+    if (strcmp(subcmd, "reauth-once") == 0) {
+        if (argc != 3) {
+            fprintf(stderr, "ERROR: usage: tailscale-wrapper reauth-once <window-seconds>\n");
+            return 1;
+        }
+        int window = parse_window(argv[2]);
+        if (window < 0) {
+            fprintf(stderr, "ERROR: window must be an integer between %d and %d seconds\n",
+                    REAUTH_WINDOW_MIN, REAUTH_WINDOW_MAX);
+            return 1;
+        }
+
+        setgroups(0, NULL);
+        setgid(0);
+        setuid(0);
+
+        return do_reauth(window, 0);
     }
 
     if (strcmp(subcmd, "auth") == 0) {
@@ -650,6 +730,6 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    fprintf(stderr, "ERROR: unknown subcommand '%s' — use auth, set-routes, set-ssh, or reauth\n", subcmd);
+    fprintf(stderr, "ERROR: unknown subcommand '%s' — use auth, set-routes, set-ssh, reauth, or reauth-once\n", subcmd);
     return 1;
 }

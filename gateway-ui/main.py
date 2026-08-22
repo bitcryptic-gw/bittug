@@ -1436,6 +1436,44 @@ def _tailscale_auth_url() -> str:
         return ""
 
 
+def _tailscale_status_json() -> dict:
+    """Fresh `tailscale status --json` as a dict. Empty on any failure."""
+    rc, out, _ = _run([_TAILSCALE, "status", "--json"])
+    if rc != 0:
+        return {}
+    try:
+        data = json.loads(out)
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, AttributeError):
+        return {}
+
+
+def _tailscale_user_auth_confirmed() -> bool:
+    """True when tailscaled reports a running, online, user-owned connection —
+    i.e. BackendState==Running, Self.Online==true and no ACL tags, matching the
+    watchdog's user_auth_confirmed(). Used to resolve the user-auth-only path
+    (no tagged key), which has no watchdog state file to read success from."""
+    data = _tailscale_status_json()
+    if data.get("BackendState") != "Running":
+        return False
+    if data.get("Self", {}).get("Online") is not True:
+        return False
+    if data.get("Self", {}).get("Tags"):
+        return False
+    return True
+
+
+TS_TAGGED_KEY = Path("/etc/gateway/tailscale.key")
+
+
+def _has_tagged_key() -> bool:
+    """Whether a persisted tagged auth key exists (and is non-empty)."""
+    try:
+        return TS_TAGGED_KEY.exists() and TS_TAGGED_KEY.stat().st_size > 0
+    except OSError:
+        return False
+
+
 def _reauth_log_tail(lines: int = 20) -> str:
     """Tail of the reauth log — used to surface wrapper errors in the API
     response instead of a bare failure."""
@@ -1469,17 +1507,39 @@ def api_tailscale_reauth_status(_: Auth, request: Request):
     """Reauth state, viewable from anywhere (Bearer-auth'd).
 
     LAN-origin is *reported* so the UI can warn the operator, but only the
-    trigger (POST) is gated on it."""
+    trigger (POST) is gated on it.
+
+    Two regimes share this endpoint:
+      * has_tagged_key true  — the watchdog-backed flow: status comes from the
+        pending state file (pending / success / fallback / fallback-failed) and
+        resolves when the watchdog flips it to a final state.
+      * has_tagged_key false — user-auth-only: no tagged key, so no watchdog and
+        no state file exist. Status is derived live from tailscaled: 'pending'
+        while a login URL is being awaited, 'success' once Running+online with
+        no ACL tags, else 'idle'."""
     lan, reason = _request_is_lan(request)
-    state: dict = {}
+    has_key = _has_tagged_key()
+
+    status = "idle"
+    remaining = 0
+    window = 0
     if TS_REAUTH_STATE.exists():
         try:
             state = json.loads(TS_REAUTH_STATE.read_text())
         except (json.JSONDecodeError, OSError):
             state = {}
-    status = str(state.get("status", "idle"))
-    deadline = int(state.get("deadline", 0) or 0)
-    remaining = max(0, deadline - int(time.time())) if status == "pending" else 0
+        status = str(state.get("status", "idle"))
+        deadline = int(state.get("deadline", 0) or 0)
+        remaining = max(0, deadline - int(time.time())) if status == "pending" else 0
+        window = int(state.get("window", 0) or 0)
+    elif not has_key:
+        auth_url = _tailscale_auth_url()
+        if auth_url:
+            status = "pending"
+        elif _tailscale_user_auth_confirmed():
+            status = "success"
+        else:
+            status = "idle"
 
     log_tail = ""
     if TS_REAUTH_LOG.exists():
@@ -1493,12 +1553,13 @@ def api_tailscale_reauth_status(_: Auth, request: Request):
     return {
         "status": status,
         "remaining": remaining,
-        "window": int(state.get("window", 0) or 0),
+        "window": window,
         "auth_url": auth_url,
         "qr_svg": _qr_svg(auth_url) if auth_url else None,
         "lan_source": lan,
         "lan_reason": reason,
         "log": log_tail,
+        "has_tagged_key": has_key,
     }
 
 
@@ -1520,7 +1581,9 @@ async def api_tailscale_reauth(_: Auth, request: Request):
 
     if not Path(_TS_WRAPPER).exists():
         raise HTTPException(status_code=503, detail="tailscale-wrapper not installed — run install-tailscale.sh")
-    if not _service_installed("tailscale-reauth-watchdog.service"):
+
+    has_key = _has_tagged_key()
+    if has_key and not _service_installed("tailscale-reauth-watchdog.service"):
         raise HTTPException(status_code=503, detail="tailscale-reauth-watchdog.service not installed — re-run sync-provisioning.sh")
 
     ts_info = _service_info("tailscaled.service")
@@ -1534,6 +1597,10 @@ async def api_tailscale_reauth(_: Auth, request: Request):
             st = {}
         if st.get("status") == "pending":
             raise HTTPException(status_code=409, detail="A reauthentication is already in progress")
+    elif not has_key and _tailscale_auth_url():
+        # No tagged key → no state file/watchdog; a live login URL means a
+        # user-auth is still being awaited, so don't stack a second one.
+        raise HTTPException(status_code=409, detail="A reauthentication is already in progress")
 
     try:
         window = int(CONFIG.get("tailscale_reauth_window", TS_REAUTH_WINDOW_DEFAULT))
@@ -1548,11 +1615,18 @@ async def api_tailscale_reauth(_: Auth, request: Request):
     # the timeout (observed on first use: HTTP 500 {"detail":"timeout"} despite
     # the reauth succeeding in ~0.1s). Waiting on process exit instead — with
     # output going to a file — decouples the response from the detached child.
+    #
+    # Two wrapper modes:
+    #   * has_key  → "reauth": watchdog-backed (pending state file + armed
+    #     watchdog that falls back to the saved tagged key on time-out).
+    #   * !has_key → "reauth-once": pure user-auth with no tagged key involved;
+    #     nothing to revert to, so no watchdog is armed at all.
+    subcmd = "reauth" if has_key else "reauth-once"
     TS_REAUTH_LOG.parent.mkdir(parents=True, exist_ok=True)
     log_handle = open(TS_REAUTH_LOG, "ab")
     try:
         proc = await asyncio.create_subprocess_exec(
-            _TS_WRAPPER, "reauth", str(window),
+            _TS_WRAPPER, subcmd, str(window),
             stdin=asyncio.subprocess.DEVNULL,
             stdout=log_handle,
             stderr=log_handle,
@@ -1576,7 +1650,7 @@ async def api_tailscale_reauth(_: Auth, request: Request):
 
     # Capture the interactive login URL from tailscaled once it drops into
     # NeedsLogin (poll briefly; the known upstream hang is handled by the
-    # watchdog, not here).
+    # watchdog when armed, and is otherwise just reported here).
     auth_url = ""
     for _ in range(20):
         auth_url = _tailscale_auth_url()
@@ -1585,7 +1659,8 @@ async def api_tailscale_reauth(_: Auth, request: Request):
         await asyncio.sleep(0.5)
 
     return {"ok": True, "auth_url": auth_url, "qr_svg": _qr_svg(auth_url) if auth_url else None,
-            "window": window, "status": "pending", "remaining": window}
+            "window": window, "status": "pending", "remaining": window,
+            "has_tagged_key": has_key}
 
 
 # ── System / Version ──────────────────────────────────────────────────────────
