@@ -28,6 +28,7 @@ const depinState = {
   updating: null,
   restarting: null,
   checking: false,
+  projects: {},
 };
 
 // ── API ───────────────────────────────────────────────────────────────────────
@@ -2071,6 +2072,7 @@ async function loadDepin() {
       api('/api/depin/auto-update').catch(() => ({})),
     ]);
     depinState.autoUpdate = auto.projects || {};
+    depinState.projects = (d && d.projects) || {};
     renderDepin(d);
     depinPreFill();
   } catch (e) {
@@ -2158,11 +2160,17 @@ function depinUpdateControls(project, d) {
       Image ${escHtml(shortDigest(s.local_digest))}${s.image_created ? ` (built ${fmtTimestamp(s.image_created)})` : ''}
     </div>`
         : '');
+  // While a restart is still in the extended polling window, be honest that the
+  // service is coming back up rather than presenting a transient (Honeygain's
+  // known slow settle starts on "Error" for ~20-30s) as a settled failure.
+  const restartNote = depinState.restarting === project
+    ? `<div class="dim depin-restart-note">Restart in progress — the service can take up to ~30s to come back up.</div>`
+    : '';
   return `<div class="depin-update-controls">
     ${updateBtn}
     ${restartBtn}
     <label class="depin-auto-check"><input type="checkbox" class="depin-auto-toggle" data-project="${project}"${auto ? ' checked' : ''}> Auto-update</label>
-  </div>${versionLine}
+  </div>${versionLine}${restartNote}
   <div class="depin-check-meta dim">
     Last update check: ${fmtTimestamp(s.update_last_checked)}
   </div>${autoPending}${errLine}`;
@@ -2334,24 +2342,40 @@ async function depinRestart(project) {
     if (btn) { btn.disabled = disabled; btn.textContent = label; }
   };
   showBusy('Restarting\u2026', true);
+  // Honeygain settles slowly (a local restart doesn't immediately release its
+  // backend session, so the card sits on "Error" for ~20-30s before flipping
+  // to Active). Keep polling + the busy state through that known window so the
+  // user isn't left staring at a stale "Error". Applies uniformly to all four
+  // projects — the extra polls are harmless no-ops once a fast project is
+  // already Active.
+  const POLLS = [2000, 8000, 15000, 25000, 33000];
+  const WINDOW = 36000;
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    showBusy('Restart', false);
+    depinState.restarting = null;
+  };
   try {
     await api(`/api/depin/${project}/restart`, 'POST');
-    // Restart + version capture complete in the backend; re-poll to pick up the
-    // freshly captured version and the post-restart health/status.
-    setTimeout(loadDepin, 2000);
-    setTimeout(loadDepin, 8000);
+    // Poll through the extended window. Clear the busy state early once the
+    // service is actually back up, so urnetwork/myst/anyone (fast settle)
+    // don't wait the whole window.
+    for (const t of POLLS) {
+      setTimeout(async () => {
+        if (done) return;
+        await loadDepin();
+        const s = (depinState.projects && depinState.projects[project]);
+        if (s && s.service_state === 'active') finish();
+      }, t);
+    }
+    // Safety-net: never leave the button stuck even if nothing resolves.
+    setTimeout(finish, WINDOW);
   } catch (e) {
     if (e.message !== 'unauthorized') alert(`${project}: ${e.message}`);
     setTimeout(loadDepin, 500);
-  } finally {
-    // Never leave the button stuck. Restore after the backend returns, then
-    // again on a bounded timeout as a safety net.
-    showBusy('Restart', false);
-    depinState.restarting = null;
-    setTimeout(() => {
-      const b2 = document.querySelector(`.depin-restart-btn[data-project="${project}"]`);
-      if (b2) { b2.disabled = false; b2.textContent = 'Restart'; }
-    }, 15000);
+    finish();
   }
 }
 

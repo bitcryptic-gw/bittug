@@ -958,7 +958,8 @@ code.addr {
 }
 
 .depin-check-meta,
-.depin-auto-pending {
+.depin-auto-pending,
+.depin-restart-note {
   margin-top: .3rem;
   font-size: .78rem;
   line-height: 1.4;
