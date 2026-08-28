@@ -75,6 +75,14 @@ local_digest() {
     norm_digest "$out"
 }
 
+# ── Image build/creation timestamp (when the local image was built) ───────────
+image_created() {
+    local image="$1" out
+    out=$("$DOCKER" image inspect "$image" --format '{{.Created}}' 2>/dev/null || true)
+    [ -z "$out" ] && { printf ''; return; }
+    printf '%s' "$out"
+}
+
 # ── Latest remote index digest (read-only, no pull) ──────────────────────────
 # Uses `docker buildx imagetools inspect`, which performs the registry token
 # dance anonymously for both Docker Hub and ghcr.io (a bare curl / plain
@@ -95,7 +103,7 @@ prev_flag() {
 }
 
 write_proj() {
-    local project="$1" avail="$2" dig="$3" err="$4" lc="$5" locd="$6"
+    local project="$1" avail="$2" dig="$3" err="$4" lc="$5" locd="$6" created="$7"
     python3 -c "
 import json, os
 state = {'projects': {}}
@@ -107,6 +115,7 @@ state.setdefault('projects', {})
 p = state['projects'].setdefault('$project', {})
 p['remote_digest'] = '$dig'
 p['local_digest'] = '$locd'
+p['image_created'] = '$created'
 p['update_available'] = ('$avail' == '1')
 p['last_checked'] = '$lc'
 if '$err':
@@ -117,6 +126,66 @@ json.dump(state, open('$STATE_FILE', 'w'), indent=2)
 " 2>/dev/null
 }
 
+# ── Version capture on (re)start — NOT on the cycle timer ────────────────────
+# The version line for urnetwork/mysterium/anyone lives on a STARTUP line,
+# which scrolls out of any short tail window once the container has been
+# running a while. So we only try to capture it immediately after a real
+# restart (auto-update here, or the manual Update / enable paths in main.py).
+# On a miss (slow start, or the line never appears), log loudly and PRESERVE
+# the previously captured version — never overwrite it with blank.
+# Honeygain has no version line at all; always a digest+date fallback.
+# NOTE: the version-pattern list here mirrors _depin_capture_version_on_restart
+# in gateway-ui/main.py — keep the two in sync.
+JOURNALCTL="/bin/journalctl"
+CAP_SINCE="25s"          # bounded re-read window after the restart
+CAP_RETRIES=12           # ~12 x 1s of bounded readiness waiting
+
+set_captured_version() {
+    local project="$1" ver="$2"
+    python3 -c "
+import json, os
+state = {'projects': {}}
+try:
+    if os.path.exists('$STATE_FILE'):
+        state = json.load(open('$STATE_FILE'))
+except: pass
+state.setdefault('projects', {}).setdefault('$project', {})['captured_version'] = '$ver'
+json.dump(state, open('$STATE_FILE', 'w'), indent=2)
+" 2>/dev/null
+}
+
+capture_version_on_restart() {
+    local project="$1" unit pat strip ver tries i
+    case "$project" in
+        honeygain) return 0 ;;   # no version line exists — always digest fallback
+        urnetwork) pat='Provider [0-9][^ ]* started';  strip='s/^Provider //; s/ started$//' ;;
+        myst)      pat='Starting Mysterium Node [0-9]+(\.[0-9]+)+';  strip='s/^Starting Mysterium Node //' ;;
+        anyone)    pat='Anon version [0-9][^ ]*';  strip='s/^Anon version //' ;;
+        *) return 0 ;;
+    esac
+    unit="depin-${project}.service"
+
+    # Bounded readiness wait: retry reading the fresh startup window until the
+    # version line appears or we time out. Don't grep once-and-give-up on a
+    # slow start — but never block indefinitely.
+    tries=0
+    ver=""
+    while [ "$tries" -lt "$CAP_RETRIES" ]; do
+        ver=$("$JOURNALCTL" "-u" "$unit" "--since" "$CAP_SINCE" "-o" "cat" "--no-pager" 2>/dev/null \
+                | grep -oE "$pat" | head -1 | sed "$strip" || true)
+        [ -n "$ver" ] && break
+        tries=$((tries + 1))
+        sleep 1
+    done
+
+    if [ -z "$ver" ]; then
+        echo "$LOG_TAG: WARNING: no version line captured for ${project} after restart (pattern '${pat}'); preserving prior captured_version"
+        return 0
+    fi
+    set_captured_version "$project" "$ver"
+    echo "$LOG_TAG: captured ${project} version: ${ver}"
+}
+
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 prev_state=$(load_state)
 
@@ -124,6 +193,7 @@ prev_state=$(load_state)
 declare -A final_avail
 declare -A new_remote
 declare -A new_local
+declare -A new_created
 declare -A new_err
 
 has_updates=0
@@ -135,11 +205,13 @@ for project in "${!IMAGES[@]}"; do
     if [ -z "$loc" ]; then
         # Image not pulled — nothing to compare; record a clean no-update state.
         new_local[$project]=""
+        new_created[$project]=""
         new_remote[$project]=""
         new_err[$project]=""
         continue
     fi
     new_local[$project]="$loc"
+    new_created[$project]="$(image_created "$image")"
 
     rem=$(remote_digest "$image" || true)
     if [ -z "$rem" ]; then
@@ -163,14 +235,14 @@ for project in "${!IMAGES[@]}"; do
     dig="${new_remote[$project]-}"
     if [ -z "$dig" ] && [ -z "${new_err[$project]-}" ]; then
         # Nothing pulled locally: no update possible, not an error.
-        write_proj "$project" 0 "" "" "$NOW" "$(local_digest "${IMAGES[$project]}")"
+        write_proj "$project" 0 "" "" "$NOW" "$(local_digest "${IMAGES[$project]}")" "${new_created[$project]-}"
         continue
     fi
     if [ -z "$dig" ]; then
         # Remote lookup failed: preserve prior flag, record the error.
         prior=$(prev_flag "$project")
         [ "$prior" = "1" ] && avail=1 || avail=0
-        write_proj "$project" "$avail" "" "${new_err[$project]}" "$NOW" "$loc"
+        write_proj "$project" "$avail" "" "${new_err[$project]}" "$NOW" "$loc" "${new_created[$project]-}"
         if [ "$avail" = "1" ]; then
             # A preserved-available project is a real auto-update candidate for
             # this cycle: include it so it can be applied once its registry
@@ -182,7 +254,7 @@ for project in "${!IMAGES[@]}"; do
     fi
     avail=0
     if [ -n "${final_avail[$project]-}" ]; then avail=1; fi
-    write_proj "$project" "$avail" "$dig" "" "$NOW" "$loc"
+    write_proj "$project" "$avail" "$dig" "" "$NOW" "$loc" "${new_created[$project]-}"
 done
 
 # ── Apply auto-updates (only on confirmed flag) ──────────────────────────────
@@ -207,6 +279,10 @@ for project in "${!final_avail[@]}"; do
         continue
     fi
     "/bin/systemctl" restart "depin-${project}.service" 2>/dev/null || true
+    # New container (re)started: capture the running version now, while its
+    # startup version line is still in the fresh log window. Honeygain is a
+    # no-op here (no version line). Aligned with the capture in main.py.
+    capture_version_on_restart "$project"
     # Confirmed successful pull + applied: clear the flag to match the new state.
     # The pull + restart have already happened; a JSON write failure here must
     # degrade gracefully (log + no-op), not abort the end of the sequence.

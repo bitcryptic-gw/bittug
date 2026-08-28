@@ -2142,13 +2142,34 @@ function depinUpdateControls(project, d) {
   const errLine = s.update_last_error
     ? `<div class="warn-text depin-check-warn">Update check failed: ${escHtml(s.update_last_error)}</div>`
     : '';
+  // Bests-available version line: real captured version when we have one,
+  // otherwise Task 1's digest+date. One line, never both.
+  const versionLine = s.captured_version
+    ? `<div class="depin-check-meta dim">Version ${escHtml(s.captured_version)}</div>`
+    : (s.local_digest
+        ? `<div class="depin-check-meta dim">
+      Image ${escHtml(shortDigest(s.local_digest))}${s.image_created ? ` (built ${fmtTimestamp(s.image_created)})` : ''}
+    </div>`
+        : '');
   return `<div class="depin-update-controls">
     ${updateBtn}
     <label class="depin-auto-check"><input type="checkbox" class="depin-auto-toggle" data-project="${project}"${auto ? ' checked' : ''}> Auto-update</label>
-  </div>
+  </div>${versionLine}
   <div class="depin-check-meta dim">
     Last update check: ${fmtTimestamp(s.update_last_checked)}
   </div>${autoPending}${errLine}`;
+}
+
+// A full local digest is "sha256:<64 hex>" (normalized shape from
+// depin-update-check.sh); show the conventional short form — the "sha256:"
+// label + first 12 hex chars. Split on the known ':' prefix so we always derive
+// the short form from the string's actual structure, never from a blind
+// anywhere-in-the-string scan.
+function shortDigest(fullDigest) {
+  if (!fullDigest) return '';
+  const parts = fullDigest.split(':');
+  const digest = parts.length > 1 ? parts[1] : parts[0];
+  return 'sha256:' + digest.slice(0, 12);
 }
 
 function depinMystNodeUI(d, hostname) {

@@ -2585,6 +2585,9 @@ def _depin_project_status(project: str) -> dict:
         "update_available": _depin_update_available(project),
         "update_last_checked": _depin_update_state(project).get("last_checked", ""),
         "update_last_error": _depin_update_state(project).get("last_error", ""),
+        "local_digest": _depin_update_state(project).get("local_digest", ""),
+        "image_created": _depin_update_state(project).get("image_created", ""),
+        "captured_version": _depin_update_state(project).get("captured_version", ""),
     }
 
 
@@ -2603,6 +2606,61 @@ def _depin_update_state(project: str) -> dict:
 
 def _depin_update_available(project: str) -> bool:
     return bool(_depin_update_state(project).get("update_available", False))
+
+
+# Version-capture patterns, kept in sync with capture_version_on_restart in
+# scripts/depin-update-check.sh (same 3 projects, same extraction). `\K`-free:
+# each regex captures the full phrase and group(1) is the version token.
+_DEPIN_VERSION_PATTERNS = {
+    "urnetwork": re.compile(r"Provider\s+([0-9][^ ]*?)\s+started"),
+    "myst":      re.compile(r"Starting Mysterium Node\s+([0-9]+(?:\.[0-9]+)+)"),
+    "anyone":    re.compile(r"Anon version\s+([0-9][^ ]*)"),
+}
+
+
+def _depin_capture_version_on_restart(project: str) -> None:
+    """Capture a project's real version right after a container (re)start.
+
+    The version line lives on a STARTUP log line that scrolls out of any short
+    tail window once the container has been up a while, so this is only meant
+    to be called from a real restart/start call site (manual Update, enable),
+    never from the recurring status poll. Honeygain has no version line and is
+    a no-op. Bounded writes only; on a miss we preserve the prior value rather
+    than blanking it."""
+    if project not in _DEPIN_VERSION_PATTERNS:
+        return
+    pat = _DEPIN_VERSION_PATTERNS[project]
+    unit = _depin_service_unit(project)
+    window = "25s"
+    # Bounded readiness wait: retry until the line appears or we time out.
+    for _ in range(12):
+        rc, out, _ = _run(
+            ["journalctl", "-u", unit, "--since", window, "-o", "cat", "--no-pager"],
+            timeout=10,
+        )
+        m = pat.search(out or "") if rc == 0 else None
+        if m:
+            _depin_set_captured_version(project, m.group(1))
+            logging.info("captured %s version: %s", project, m.group(1))
+            return
+        time.sleep(1)
+    logging.warning(
+        "no version line captured for %s after restart (pattern %s); preserving prior captured_version",
+        project, pat.pattern,
+    )
+
+
+def _depin_set_captured_version(project: str, version: str) -> None:
+    """Write only `captured_version`, leaving every other field untouched."""
+    try:
+        state = {}
+        if DEPIN_UPDATE_STATE.exists():
+            state = json.loads(DEPIN_UPDATE_STATE.read_text())
+        state.setdefault("projects", {}).setdefault(project, {})["captured_version"] = version
+        DEPIN_UPDATE_STATE.parent.mkdir(parents=True, exist_ok=True)
+        DEPIN_UPDATE_STATE.write_text(json.dumps(state, indent=2))
+    except (OSError, json.JSONDecodeError) as e:
+        logging.warning("failed to write captured_version for %s: %s", project, e)
 
 
 def _depin_check_config(project: str) -> None:
@@ -2744,6 +2802,9 @@ def api_depin_enable(_: Auth, project: str):
     rc, _, err = _run(["sudo", _SYSTEMCTL, "start", unit])
     if rc != 0:
         raise HTTPException(status_code=500, detail=err or "start failed — unit is enabled but not running; retry to start")
+    # Initial container start: capture the running version now (no-op for
+    # Honeygain). Aligned with the auto-update capture in depin-update-check.sh.
+    _depin_capture_version_on_restart(project)
     return {"ok": True, "project": project, "enabled": True}
 
 
@@ -2798,6 +2859,9 @@ def api_depin_update(_: Auth, project: str):
         rc2, _, err2 = _run(["sudo", _SYSTEMCTL, "restart", f"depin-{project}.service"], timeout=30)
         if rc2 != 0:
             raise HTTPException(status_code=500, detail=err2 or "restart failed")
+        # Fresh image pulled + restarted: capture the new running version
+        # (no-op for Honeygain). Aligned with the auto-update capture.
+        _depin_capture_version_on_restart(project)
         # Clear update state so status reflects current
         _depin_clear_update_state(project)
     return {"ok": True, "project": project, "updated": updated}
