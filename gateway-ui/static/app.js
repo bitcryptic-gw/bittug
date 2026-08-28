@@ -26,6 +26,7 @@ const depinState = {
   uninstalling: null,
   autoUpdate: {},
   updating: null,
+  restarting: null,
   checking: false,
 };
 
@@ -2133,6 +2134,12 @@ function depinUpdateControls(project, d) {
   const updateBtn = hasUpdate
     ? `<button class="btn btn-sm depin-update-btn" data-project="${project}">Update</button>`
     : `<button class="btn btn-sm" disabled>Up to date</button>`;
+  // Plain restart (not an update): forces a fresh version capture and a service
+  // bounce. Only meaningful when the service is actually running.
+  const isRunning = s.service_state === 'active';
+  const restartBtn = (depinState.restarting === project)
+    ? `<button class="btn btn-sm depin-restart-btn" data-project="${project}" disabled>Restarting\u2026</button>`
+    : `<button class="btn btn-sm depin-restart-btn" data-project="${project}"${isRunning ? '' : ' disabled'}>Restart</button>`;
   // Single source of truth: the availability flag (+ whether auto-update will
   // apply it on the next scheduled check) is derived from the same state that
   // drives the Update button — no second source.
@@ -2153,6 +2160,7 @@ function depinUpdateControls(project, d) {
         : '');
   return `<div class="depin-update-controls">
     ${updateBtn}
+    ${restartBtn}
     <label class="depin-auto-check"><input type="checkbox" class="depin-auto-toggle" data-project="${project}"${auto ? ' checked' : ''}> Auto-update</label>
   </div>${versionLine}
   <div class="depin-check-meta dim">
@@ -2315,6 +2323,35 @@ async function depinUpdateProject(project) {
     setTimeout(loadDepin, 500);
   } finally {
     depinState.updating = null;
+  }
+}
+
+async function depinRestart(project) {
+  if (depinState.restarting) return;
+  depinState.restarting = project;
+  const btn = document.querySelector(`.depin-restart-btn[data-project="${project}"]`);
+  const showBusy = (label, disabled) => {
+    if (btn) { btn.disabled = disabled; btn.textContent = label; }
+  };
+  showBusy('Restarting\u2026', true);
+  try {
+    await api(`/api/depin/${project}/restart`, 'POST');
+    // Restart + version capture complete in the backend; re-poll to pick up the
+    // freshly captured version and the post-restart health/status.
+    setTimeout(loadDepin, 2000);
+    setTimeout(loadDepin, 8000);
+  } catch (e) {
+    if (e.message !== 'unauthorized') alert(`${project}: ${e.message}`);
+    setTimeout(loadDepin, 500);
+  } finally {
+    // Never leave the button stuck. Restore after the backend returns, then
+    // again on a bounded timeout as a safety net.
+    showBusy('Restart', false);
+    depinState.restarting = null;
+    setTimeout(() => {
+      const b2 = document.querySelector(`.depin-restart-btn[data-project="${project}"]`);
+      if (b2) { b2.disabled = false; b2.textContent = 'Restart'; }
+    }, 15000);
   }
 }
 
@@ -2657,6 +2694,12 @@ function wireEvents() {
   document.getElementById('depin-grid').addEventListener('click', function(e) {
     const updateBtn = e.target.closest('.depin-update-btn');
     if (updateBtn) depinUpdateProject(updateBtn.dataset.project);
+  });
+
+  // DePIN — restart buttons (delegated)
+  document.getElementById('depin-grid').addEventListener('click', function(e) {
+    const restartBtn = e.target.closest('.depin-restart-btn');
+    if (restartBtn && !restartBtn.disabled) depinRestart(restartBtn.dataset.project);
   });
 
   // DePIN — check for updates now (tab-level trigger)

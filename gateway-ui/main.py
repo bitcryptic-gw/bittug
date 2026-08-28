@@ -104,6 +104,7 @@ DEPIN_IMAGES = {
 }
 
 _depin_check_running = False
+_depin_restart_running = False
 
 DEPIN_LOG_LINES = 50
 
@@ -2865,6 +2866,31 @@ def api_depin_update(_: Auth, project: str):
         # Clear update state so status reflects current
         _depin_clear_update_state(project)
     return {"ok": True, "project": project, "updated": updated}
+
+
+# ── POST /api/depin/{project}/restart ────────────────────────────────────────
+
+@app.post("/api/depin/{project}/restart")
+def api_depin_restart(_: Auth, project: str):
+    _depin_validate_project(project)
+    global _depin_restart_running
+    if _depin_restart_running:
+        raise HTTPException(status_code=409, detail="Another DePIN project restart is already in progress")
+    unit = _depin_service_unit(project)
+    if not _service_installed(unit):
+        raise HTTPException(status_code=503, detail=f"{unit} not installed — run install-depin-services.sh")
+    _depin_restart_running = True
+    try:
+        rc, _, err = _run(["sudo", _SYSTEMCTL, "restart", unit], timeout=30)
+        if rc != 0:
+            raise HTTPException(status_code=500, detail=err or "restart failed")
+        # A restart is itself a valid version-capture trigger (no-op for
+        # Honeygain). This is NOT an update: leave update_available / update
+        # state untouched — a plain restart must not clear a pending update.
+        _depin_capture_version_on_restart(project)
+        return {"ok": True, "project": project, "restarted": True}
+    finally:
+        _depin_restart_running = False
 
 
 def _depin_clear_update_state(project: str) -> None:
