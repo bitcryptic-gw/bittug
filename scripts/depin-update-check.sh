@@ -154,10 +154,113 @@ json.dump(state, open('$STATE_FILE', 'w'), indent=2)
 " 2>/dev/null
 }
 
+# ── Honeygain digest→version resolution (shell / root context) ──────────────
+# Honeygain's logs carry no version line, but its Docker Hub repo publishes
+# versioned tags whose index digest can match the current :latest. Resolve the
+# locally pulled digest to a published tag, cached for 24h so a manual Restart
+# (a frequent capture trigger) does not hit Docker Hub every time. The cache is
+# written to state['projects']['honeygain']['honeygain_cache'] and is SEPARATE
+# from write_proj's per-cycle keys: write_proj loads the existing project dict
+# and only sets its known keys, so this cache survives every 10-min cycle write
+# (same deliberate separation captured_version already has). COVERAGE PARITY
+# NOTE: this shell path indexes every known tag via imagetools inspect, and the
+# Python resolver in main.py (gateway-ui cannot run docker) maps the same full
+# tag set via the hub REST API + a per-tag /images backfill for old single-arch
+# tags — the two now have equal coverage, so a given local digest resolves
+# identically whether the trigger was auto-update (shell) or Restart/Update
+# (Python). Keep the resolvers' tag coverage in sync.
+HG_TTL_SECONDS=$((24 * 3600))
+HG_TAGS_API="https://registry.hub.docker.com/v2/repositories/honeygain/honeygain/tags?page_size=100"
+
+set_honeygain_cache() {
+    # $1 = "tag=digest\ntag=digest..." (updated map), $2 = now epoch (unix)
+    printf '%b' "$1" | python3 -c "
+import json, os, sys
+raw = sys.stdin.read()
+now = sys.argv[1]; state_file = sys.argv[2]; project = 'honeygain'
+tags = {}
+for line in raw.splitlines():
+    line = line.strip()
+    if not line: continue
+    t, _, d = line.partition('=')
+    if t and d: tags[t] = d
+s = {'projects': {}}
+try:
+    if os.path.exists(state_file):
+        s = json.load(open(state_file))
+except: pass
+p = s.setdefault('projects', {}).setdefault(project, {})
+p['honeygain_cache'] = {'resolved_at': int(now), 'tags': tags}
+json.dump(s, open(state_file, 'w'), indent=2)
+" "$2" "$STATE_FILE" 2>/dev/null
+}
+
+hg_cache_state() {
+    # Print "state,tag" (no spaces) or "none" — how the current local digest
+    # resolves from an existing cache. Comma-separated so it parses cleanly
+    # with `IFS=, read state tag`.
+    local wanted="$1"
+    python3 -c "
+import json, os, time, sys
+wanted = sys.argv[1]; state_file = sys.argv[2]
+try:
+    if not os.path.exists(state_file): print('none'); sys.exit(0)
+    s = json.load(open(state_file))
+    c = s.get('projects', {}).get('honeygain', {}).get('honeygain_cache')
+    if not isinstance(c, dict): print('none'); sys.exit(0)
+    tags = c.get('tags', {}) or {}
+    ts = c.get('resolved_at', 0)
+    if wanted in tags.values():
+        fresh = (time.time() - int(ts)) < $HG_TTL_SECONDS
+        tag = [k for k, v in tags.items() if v == wanted][0]
+        print(('fresh' if fresh else 'stale') + ',' + tag)
+    else:
+        print('none')
+except Exception:
+    print('none')
+" "$wanted" "$STATE_FILE" 2>/dev/null
+}
+
+resolve_honeygain_version() {
+    # Resolve the locally pulled :latest digest to a published version tag,
+    # cache-first. Sets captured_version on a match; leaves it unset (no-op,
+    # fall back to digest+date display) on no match. Never retries in a storm.
+    local loc now map tag digest final_tag state
+    loc="$(local_digest 'honeygain/honeygain:latest')"
+    [ -z "$loc" ] && return 0   # image not pulled — nothing local to resolve
+
+    IFS=',' read state tag <<< "$(hg_cache_state "$loc")"
+    if [ "$state" = "fresh" ]; then
+        set_captured_version honeygain "$tag"
+        echo "$LOG_TAG: captured honeygain version: ${tag} (cached)"
+        return 0
+    fi
+
+    # Cache miss or stale: full re-walk of published versioned tags.
+    now="$(date -u +%s)"
+    map=""
+    for tag in $(curl -fsSL "$HG_TAGS_API" 2>/dev/null \
+                    | python3 -c "import json,sys;d=json.load(sys.stdin);print(' '.join(t['name'] for t in (d.get('results') or []) if t['name']!='latest'))"); do
+        digest="$("$DOCKER" buildx imagetools inspect --format '{{.Manifest.Digest}}' "honeygain/honeygain:${tag}" 2>/dev/null)"
+        if [ -n "$digest" ]; then
+            map="${map}${tag}=${digest}\n"
+            if [ "$digest" = "$loc" ]; then final_tag="$tag"; fi
+        fi
+    done
+    set_honeygain_cache "$map" "$now"   # always refresh cache from the re-walk
+    if [ -n "${final_tag:-}" ]; then
+        set_captured_version honeygain "$final_tag"
+        echo "$LOG_TAG: captured honeygain version: ${final_tag} (matched digest ${loc})"
+    else
+        echo "$LOG_TAG: WARNING: no Honeygain tag matched local digest (${loc}); keeping prior captured_version"
+    fi
+}
+
+
 capture_version_on_restart() {
     local project="$1" unit pat strip ver tries i
     case "$project" in
-        honeygain) return 0 ;;   # no version line exists — always digest fallback
+        honeygain) resolve_honeygain_version ; return 0 ;;
         urnetwork) pat='Provider [0-9][^ ]* started';  strip='s/^Provider //; s/ started$//' ;;
         myst)      pat='Starting Mysterium Node [0-9]+(\.[0-9]+)+';  strip='s/^Starting Mysterium Node //' ;;
         anyone)    pat='Anon version [0-9][^ ]*';  strip='s/^Anon version //' ;;

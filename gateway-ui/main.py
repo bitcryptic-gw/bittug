@@ -2619,15 +2619,130 @@ _DEPIN_VERSION_PATTERNS = {
 }
 
 
+def _depin_resolve_honeygain_version() -> None:
+    """Resolve the locally-pulled Honeygain :latest digest to a published tag.
+
+    Honeygain's logs carry no version, but its Docker Hub repo publishes
+    versioned tags whose index digest can match the current :latest. gateway-ui
+    cannot run docker, so this resolves via the hub REST API (anonymous, same
+    outbound trust as the existing ntfy httpx calls): the bulk tags-list
+    provides index digests for recent tags, and older tags that omit `digest`
+    there are backfilled from the per-tag /images endpoint (valid because
+    those old single-arch images' first-arch digest equals their index
+    digest). COVERAGE PARITY NOTE: with this backfill the Python resolver maps
+    the same full set of tags (currently all 7) as the shell resolver in
+    depin-update-check.sh (which uses imagetools inspect) — the two paths now
+    resolve the same digests to the same versions, so a given local digest
+    resolves identically regardless of which trigger (auto-update vs
+    Restart/Update) fired. Both write the same honeygain_cache map.
+
+    Caveat: the per-tag /images backfill is only correct for single-arch
+    images (its per-arch digest differs from the index digest for multi-arch
+    tags). It is used only for tags the bulk tags-list reports as missing a
+    digest, which today are the single-arch 0.6.x set. If a future multi-arch
+    tag were ever missing from the bulk digests, the backfill could map a
+    sub-digest rather than the index — revisit if that scenario appears.
+
+    Cache-first (24h TTL): a manual Restart is now a frequent capture trigger,
+    and we must NOT hit Docker Hub's API on every restart — only re-walk when
+    the cache is stale or the local digest isn't in it. On no match after a
+    real re-walk, leave captured_version unset (fall back to digest+date), no
+    retry storm.
+    """
+    local_digest = _depin_update_state("honeygain").get("local_digest", "")
+    if not local_digest:
+        return  # not pulled; nothing to resolve (matches day 0)
+    now = int(time.time())
+    cache = _depin_update_state("honeygain").get("honeygain_cache")
+    cache_tags = (cache or {}).get("tags") or {}
+    # Fresh cache hit: no outbound call.
+    if cache_tags and isinstance(cache, dict):
+        ts = cache.get("resolved_at", 0)
+        if (now - int(ts)) < 24 * 3600 and local_digest in cache_tags.values():
+            tag = next(k for k, v in cache_tags.items() if v == local_digest)
+            _depin_set_captured_version("honeygain", tag)
+            logging.info("captured honeygain version: %s (cached)", tag)
+            return
+
+    # Cache miss or stale: re-walk published tags from the hub REST API.
+    # Bulk tags-list covers the recent tags' index digests. Older tags (0.6.x)
+    # omit `digest` there, so backfill them from the per-tag /images endpoint,
+    # whose first-arch digest equals the index digest for those single-arch
+    # images. Combined, this gives full index-digest parity with the shell
+    # resolver (imagetools) across every known tag. NOTE: /images per-arch
+    # digest is NOT the index digest for multi-arch tags, so only use it as a
+    # backfill for tags the bulk list already reports as missing a digest.
+    tag_digests = {}
+    tag_names = set()
+    try:
+        with httpx.Client(timeout=15) as client:
+            r = client.get(
+                "https://registry.hub.docker.com/v2/repositories/honeygain/honeygain/tags",
+                params={"page_size": 100},
+            )
+            r.raise_for_status()
+            for t in r.json().get("results", []):
+                name = t.get("name")
+                if not name or name == "latest":
+                    continue
+                tag_names.add(name)
+                digest = t.get("digest")
+                if digest:
+                    tag_digests[name] = digest
+            # Backfill older tags omitted by the bulk digests field.
+            for missing in tag_names - set(tag_digests):
+                try:
+                    ir = client.get(
+                        f"https://hub.docker.com/v2/repositories/honeygain/honeygain/tags/{missing}/images",
+                    )
+                    ir.raise_for_status()
+                    entries = ir.json()
+                    if isinstance(entries, list) and entries and entries[0].get("digest"):
+                        tag_digests[missing] = entries[0]["digest"]
+                except Exception:
+                    logging.warning("honeygain per-tag /images backfill failed for %s", missing)
+    except Exception as e:
+        logging.warning("honeygain tag-list fetch failed: %s", e)
+        return
+
+    if not tag_digests:
+        return
+
+    # Persist the refreshed cache regardless of whether a match is found.
+    try:
+        state = {}
+        if DEPIN_UPDATE_STATE.exists():
+            state = json.loads(DEPIN_UPDATE_STATE.read_text())
+        p = state.setdefault("projects", {}).setdefault("honeygain", {})
+        p["honeygain_cache"] = {"resolved_at": now, "tags": tag_digests}
+        DEPIN_UPDATE_STATE.write_text(json.dumps(state, indent=2))
+    except (OSError, json.JSONDecodeError) as e:
+        logging.warning("failed to write honeygain_cache: %s", e)
+
+    matched = next((t for t, d in tag_digests.items() if d == local_digest), None)
+    if matched:
+        _depin_set_captured_version("honeygain", matched)
+        logging.info("captured honeygain version: %s (matched digest %s)", matched, local_digest)
+    else:
+        logging.warning(
+            "no Honeygain tag matched local digest (%s); keeping prior captured_version",
+            local_digest,
+        )
+
+
 def _depin_capture_version_on_restart(project: str) -> None:
     """Capture a project's real version right after a container (re)start.
 
     The version line lives on a STARTUP log line that scrolls out of any short
     tail window once the container has been up a while, so this is only meant
     to be called from a real restart/start call site (manual Update, enable),
-    never from the recurring status poll. Honeygain has no version line and is
-    a no-op. Bounded writes only; on a miss we preserve the prior value rather
-    than blanking it."""
+    never from the recurring status poll. Honeygain has no version line and
+    instead resolves its version from a published Docker Hub tag/digest match,
+    cache-first. Bounded writes only; on a miss we preserve the prior value
+    rather than blanking it."""
+    if project == "honeygain":
+        _depin_resolve_honeygain_version()
+        return
     if project not in _DEPIN_VERSION_PATTERNS:
         return
     pat = _DEPIN_VERSION_PATTERNS[project]
