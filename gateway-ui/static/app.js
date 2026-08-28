@@ -26,6 +26,7 @@ const depinState = {
   uninstalling: null,
   autoUpdate: {},
   updating: null,
+  checking: false,
 };
 
 // ── API ───────────────────────────────────────────────────────────────────────
@@ -2132,10 +2133,22 @@ function depinUpdateControls(project, d) {
   const updateBtn = hasUpdate
     ? `<button class="btn btn-sm depin-update-btn" data-project="${project}">Update</button>`
     : `<button class="btn btn-sm" disabled>Up to date</button>`;
+  // Single source of truth: the availability flag (+ whether auto-update will
+  // apply it on the next scheduled check) is derived from the same state that
+  // drives the Update button — no second source.
+  const autoPending = hasUpdate && auto
+    ? `<div class="dim depin-auto-pending">Auto-update enabled — will be applied automatically on the next check.</div>`
+    : '';
+  const errLine = s.update_last_error
+    ? `<div class="warn-text depin-check-warn">Update check failed: ${escHtml(s.update_last_error)}</div>`
+    : '';
   return `<div class="depin-update-controls">
     ${updateBtn}
     <label class="depin-auto-check"><input type="checkbox" class="depin-auto-toggle" data-project="${project}"${auto ? ' checked' : ''}> Auto-update</label>
-  </div>`;
+  </div>
+  <div class="depin-check-meta dim">
+    Last update check: ${fmtTimestamp(s.update_last_checked)}
+  </div>${autoPending}${errLine}`;
 }
 
 function depinMystNodeUI(d, hostname) {
@@ -2292,6 +2305,36 @@ async function depinAutoUpdate(project, enabled) {
     if (e.message !== 'unauthorized') alert(`${project}: ${e.message}`);
     setTimeout(loadDepin, 500);
   }
+}
+
+async function runDepinCheck() {
+  if (depinState.checking) return;
+  const btn = document.getElementById('btn-depin-run-check');
+  const msg = document.getElementById('depin-run-check-msg');
+  if (!btn) return;
+  depinState.checking = true;
+  btn.disabled = true;
+  if (msg) { msg.textContent = 'Checking for updates…'; msg.className = 'result-msg'; }
+  try {
+    await api('/api/depin/update-check/run-now', 'POST');
+  } catch (e) {
+    if (e.message !== 'unauthorized') {
+      if (msg) { msg.textContent = e.message || 'Check failed'; msg.className = 'result-msg result-error'; }
+    }
+    depinState.checking = false;
+    btn.disabled = false;
+    return;
+  }
+  // The check runs in the background. Re-poll to pick up the new
+  // last_checked / update_available once it completes (mirrors Live Stats).
+  setTimeout(() => { loadDepin(); }, 2000);
+  setTimeout(() => { loadDepin(); }, 8000);
+  if (msg) msg.textContent = 'Check in progress…';
+  setTimeout(() => {
+    depinState.checking = false;
+    btn.disabled = false;
+    if (msg) msg.textContent = '';
+  }, 15000);
 }
 
 function depinUninstall(project, label, msg) {
@@ -2594,6 +2637,11 @@ function wireEvents() {
     const updateBtn = e.target.closest('.depin-update-btn');
     if (updateBtn) depinUpdateProject(updateBtn.dataset.project);
   });
+
+  // DePIN — check for updates now (tab-level trigger)
+  if (document.getElementById('btn-depin-run-check')) {
+    document.getElementById('btn-depin-run-check').addEventListener('click', runDepinCheck);
+  }
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────

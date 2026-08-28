@@ -957,6 +957,19 @@ code.addr {
   font-size: .8rem;
 }
 
+.depin-check-meta,
+.depin-auto-pending {
+  margin-top: .3rem;
+  font-size: .78rem;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+
+.depin-check-warn {
+  margin-top: .3rem;
+  font-size: .78rem;
+}
+
 .depin-warning {
   background: rgba(245,166,35,.10);
   border: 1px solid rgba(245,166,35,.25);

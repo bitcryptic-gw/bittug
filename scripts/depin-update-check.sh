@@ -7,6 +7,9 @@ set -euo pipefail
 STATE_FILE="/var/lib/gateway-ui/depin-update-state.json"
 AUTO_FILE="/var/lib/gateway-ui/depin-auto-update.json"
 NOTIFY_FILE="/var/lib/gateway-ui/depin-notify-pending"
+LOG_TAG="depin-update-check"
+
+DOCKER="/usr/bin/docker"
 
 declare -A IMAGES=(
     ["honeygain"]="honeygain/honeygain:latest"
@@ -19,10 +22,12 @@ mkdir -p /var/lib/gateway-ui
 chown root:gateway-ui /var/lib/gateway-ui 2>/dev/null || true
 chmod 2775 /var/lib/gateway-ui 2>/dev/null || true
 
-# ── Load current state ───────────────────────────────────────────────────────
-prev_state=$(load_state)
-
-load_auto() {
+# ── Load prior state ─────────────────────────────────────────────────────────
+# Emits one tab-delimited "project\tremote_digest\tupdate_available" line per
+# project that has a known remote digest, so callers can preserve prior flags on
+# transient failure. Tab-delimited (not ':'-delimited) because a remote digest
+# itself contains ':'.
+load_state() {
     if [ -f "$STATE_FILE" ]; then
         python3 -c "
 import json, sys
@@ -30,7 +35,8 @@ try:
     d = json.load(open('$STATE_FILE'))
     for k, v in d.get('projects', {}).items():
         r = v.get('remote_digest', '')
-        if r: print(f'{k}:{r}')
+        u = '1' if v.get('update_available', False) else '0'
+        if r: print(f'{k}\t{r}\t{u}')
 except: pass
 " 2>/dev/null
     fi
@@ -49,58 +55,47 @@ except: pass
     fi
 }
 
-# ── Check each project ───────────────────────────────────────────────────────
-declare -A new_remote
-has_updates=0
+log() {
+    echo "$LOG_TAG: $*" >&2
+}
 
-for project in "${!IMAGES[@]}"; do
-    image="${IMAGES[$project]}"
+# Parse a repo@pinned/sha256:... or bare sha256:... reference down to the digest.
+norm_digest() {
+    local ref="$1"
+    ref="${ref##*@}"
+    ref="${ref%%:*}":"${ref##*:}"
+    printf '%s' "$ref"
+}
 
-    # Get local digest (if image is pulled)
-    loc=$(docker image inspect "$image" --format '{{index .RepoDigests 0}}' 2>/dev/null || true)
-    if [ -z "$loc" ]; then
-        # Image not pulled — nothing to compare
-        continue
-    fi
+# ── Local digest (what we have pulled) ───────────────────────────────────────
+local_digest() {
+    local image="$1" out
+    out=$("$DOCKER" image inspect "$image" --format '{{index .RepoDigests 0}}' 2>/dev/null || true)
+    [ -z "$out" ] && { printf ''; return; }
+    norm_digest "$out"
+}
 
-    # Get remote manifest digest (lightweight, no full pull)
-    # docker manifest inspect returns the manifest list digest; for single-arch
-    # images, compare against the manifest digest directly.
-    rem=$(docker manifest inspect "$image" 2>/dev/null | python3 -c "
-import json, sys
-try:
-    m = json.load(sys.stdin)
-    if 'manifests' in m:
-        # Multi-arch — use the arm64 variant digest
-        for entry in m['manifests']:
-            if entry.get('platform', {}).get('architecture') == 'arm64':
-                print(entry['digest'])
-                break
-    if 'config' in m:
-        print(m['config'].get('digest', m.get('digest', '')))
-except: pass
-" 2>/dev/null || true)
+# ── Latest remote index digest (read-only, no pull) ──────────────────────────
+# Uses `docker buildx imagetools inspect`, which performs the registry token
+# dance anonymously for both Docker Hub and ghcr.io (a bare curl / plain
+# `docker manifest inspect` 401s or omits the index digest). Returns non-zero
+# on any failure so the caller can treat it as "unknown", never as
+# "no update available".
+remote_digest() {
+    local image="$1" out
+    out=$("$DOCKER" buildx imagetools inspect --format '{{.Manifest.Digest}}' "$image" 2>/dev/null || true)
+    [ -z "$out" ] && return 1
+    norm_digest "$out"
+}
 
-    if [ -z "$rem" ]; then
-        continue
-    fi
+# ── Helpers over the JSON state file ────────────────────────────────────────
+prev_flag() {
+    local project="$1"
+    echo "${prev_state:-}" | awk -F'\t' -v p="$project" '$1==p{print $3}' || true
+}
 
-    new_remote[$project]="$rem"
-
-    # Compare against previously-known remote digest
-    prev=$(echo "${prev_state:-}" | grep "^${project}:" | cut -d: -f2- || true)
-    if [ "$prev" != "$rem" ]; then
-        available[$project]=1
-        has_updates=1
-    fi
-done
-
-# ── Build state JSON ─────────────────────────────────────────────────────────
-# Build per-project entries as JSON fragments
-for project in "${!IMAGES[@]}"; do
-    avail=0
-    dig="${new_remote[$project]-}"
-    if [ -n "${available[$project]-}" ]; then avail=1; fi
+write_proj() {
+    local project="$1" avail="$2" dig="$3" err="$4" lc="$5" locd="$6"
     python3 -c "
 import json, os
 state = {'projects': {}}
@@ -108,30 +103,130 @@ try:
     if os.path.exists('$STATE_FILE'):
         state = json.load(open('$STATE_FILE'))
 except: pass
-state.setdefault('projects', {})['$project'] = {
-    'remote_digest': '$dig',
-    'update_available': bool($avail)
-}
+state.setdefault('projects', {})
+p = state['projects'].setdefault('$project', {})
+p['remote_digest'] = '$dig'
+p['local_digest'] = '$locd'
+p['update_available'] = ('$avail' == '1')
+p['last_checked'] = '$lc'
+if '$err':
+    p['last_error'] = '$err'
+else:
+    p.pop('last_error', None)
 json.dump(state, open('$STATE_FILE', 'w'), indent=2)
-"
+" 2>/dev/null
+}
+
+NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+prev_state=$(load_state)
+
+# ── Check each project ───────────────────────────────────────────────────────
+declare -A final_avail
+declare -A new_remote
+declare -A new_local
+declare -A new_err
+
+has_updates=0
+
+for project in "${!IMAGES[@]}"; do
+    image="${IMAGES[$project]}"
+
+    loc=$(local_digest "$image")
+    if [ -z "$loc" ]; then
+        # Image not pulled — nothing to compare; record a clean no-update state.
+        new_local[$project]=""
+        new_remote[$project]=""
+        new_err[$project]=""
+        continue
+    fi
+    new_local[$project]="$loc"
+
+    rem=$(remote_digest "$image" || true)
+    if [ -z "$rem" ]; then
+        # Registry lookup failure. Log loudly and PRESERVE the prior update flag
+        # rather than silently flipping this project to "no update available".
+        log "manifest-inspect/buildx FAILED for ${image}; preserving prior update state"
+        new_remote[$project]=""
+        new_err[$project]="remote-inspect-failed:${image}"
+        continue
+    fi
+    new_remote[$project]="$rem"
+
+    if [ "$rem" != "$loc" ]; then
+        final_avail[$project]=1
+        has_updates=1
+    fi
 done
 
-# ── Handle updates ───────────────────────────────────────────────────────────
+# ── Persist per-project state ────────────────────────────────────────────────
+for project in "${!IMAGES[@]}"; do
+    dig="${new_remote[$project]-}"
+    if [ -z "$dig" ] && [ -z "${new_err[$project]-}" ]; then
+        # Nothing pulled locally: no update possible, not an error.
+        write_proj "$project" 0 "" "" "$NOW" "$(local_digest "${IMAGES[$project]}")"
+        continue
+    fi
+    if [ -z "$dig" ]; then
+        # Remote lookup failed: preserve prior flag, record the error.
+        prior=$(prev_flag "$project")
+        [ "$prior" = "1" ] && avail=1 || avail=0
+        write_proj "$project" "$avail" "" "${new_err[$project]}" "$NOW" "$loc"
+        if [ "$avail" = "1" ]; then
+            # A preserved-available project is a real auto-update candidate for
+            # this cycle: include it so it can be applied once its registry
+            # lookup succeeds again, rather than leaving it flagged but idle.
+            final_avail[$project]=1
+            has_updates=1
+        fi
+        continue
+    fi
+    avail=0
+    if [ -n "${final_avail[$project]-}" ]; then avail=1; fi
+    write_proj "$project" "$avail" "$dig" "" "$NOW" "$loc"
+done
+
+# ── Apply auto-updates (only on confirmed flag) ──────────────────────────────
 if [ "$has_updates" -eq 0 ]; then
     exit 0
 fi
 
-# Check auto-update flags
 auto_projects=$(load_auto)
-for project in "${!available[@]}"; do
-    if echo "$auto_projects" | grep -qw "$project"; then
-        echo "Auto-updating $project..."
-        image="${IMAGES[$project]}"
-        /usr/bin/docker pull "$image" && \
-            /bin/systemctl restart "depin-${project}.service" || true
+
+for project in "${!final_avail[@]}"; do
+    if ! echo "$auto_projects" | grep -qw "$project"; then
+        continue
+    fi
+    image="${IMAGES[$project]}"
+    echo "$LOG_TAG: Auto-updating ${project} (${image})..."
+    before="${new_local[$project]}"
+    after=$("$DOCKER" pull "$image" 2>/dev/null && local_digest "$image") || true
+    if [ -n "$after" ] && [ "$after" = "$before" ] || [ -z "$after" ]; then
+        # Pull did not change the local image (failed, or pulled nothing new).
+        # Do NOT clear update_available — it stays until a real apply happens.
+        echo "$LOG_TAG: pull for ${project} did not change image (${after:-failed}); keeping update_available"
+        continue
+    fi
+    "/bin/systemctl" restart "depin-${project}.service" 2>/dev/null || true
+    # Confirmed successful pull + applied: clear the flag to match the new state.
+    # The pull + restart have already happened; a JSON write failure here must
+    # degrade gracefully (log + no-op), not abort the end of the sequence.
+    if ! python3 -c "
+import json, os
+try:
+    p='$STATE_FILE'
+    if os.path.exists(p):
+        s=json.load(open(p))
+        s.setdefault('projects', {}).setdefault('$project', {})['update_available'] = False
+        json.dump(s, open(p, 'w'), indent=2)
+except Exception:
+    raise SystemExit(1)
+" 2>/dev/null; then
+        echo "$LOG_TAG: WARNING: failed to clear update_available for ${project} after apply (state write). Update was pulled and service restarted."
+    else
+        echo "$LOG_TAG: auto-updated ${project} and cleared update_available"
     fi
 done
 
 # Signal NTFY notifier that updates were found (picked up by gateway-ui's
-# background notifier loop)
+# background notifier loop). Only leftover projects (manual ones) still flagged.
 touch "$NOTIFY_FILE"

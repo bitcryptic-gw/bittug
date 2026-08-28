@@ -103,6 +103,8 @@ DEPIN_IMAGES = {
     "anyone": "ghcr.io/anyone-protocol/ator-protocol:latest",
 }
 
+_depin_check_running = False
+
 DEPIN_LOG_LINES = 50
 
 DEPIN_HEALTH_PATTERNS = {
@@ -2581,17 +2583,26 @@ def _depin_project_status(project: str) -> dict:
         "health": health_label,
         "logs": log_lines[-DEPIN_LOG_LINES:],
         "update_available": _depin_update_available(project),
+        "update_last_checked": _depin_update_state(project).get("last_checked", ""),
+        "update_last_error": _depin_update_state(project).get("last_error", ""),
     }
 
 
-def _depin_update_available(project: str) -> bool:
+def _depin_update_state(project: str) -> dict:
+    """Per-project record from the update-check state file. Empty dict on any
+    read/permission failure so callers degrade gracefully."""
     if not DEPIN_UPDATE_STATE.exists():
-        return False
+        return {}
     try:
         state = json.loads(DEPIN_UPDATE_STATE.read_text())
-        return bool(state.get("projects", {}).get(project, {}).get("update_available", False))
+        rec = state.get("projects", {}).get(project, {})
+        return rec if isinstance(rec, dict) else {}
     except (json.JSONDecodeError, OSError):
-        return False
+        return {}
+
+
+def _depin_update_available(project: str) -> bool:
+    return bool(_depin_update_state(project).get("update_available", False))
 
 
 def _depin_check_config(project: str) -> None:
@@ -2839,6 +2850,30 @@ async def api_depin_auto_update(_: Auth, project: str, request: Request):
         logging.warning("Failed to write %s: %s", DEPIN_AUTO_UPDATE, e)
         raise HTTPException(status_code=500, detail=f"Failed to save auto-update state: {e}")
     return {"ok": True, "project": project, "auto_update": enabled}
+
+
+# ── POST /api/depin/update-check/run-now ─────────────────────────────────────
+# Force an immediate update-check, independent of the timer schedule. The unit is
+# a Type=oneshot, so `systemctl start` blocks until the full check (registry
+# digests + any auto-update pull/restart) completes. The frontend re-polls
+# /api/depin/status afterwards to pick up fresh last_checked/update_available.
+
+def _run_depin_update_check() -> None:
+    global _depin_check_running
+    try:
+        _run(["sudo", _SYSTEMCTL, "start", "depin-update-check.service"], timeout=300)
+    finally:
+        _depin_check_running = False
+
+
+@app.post("/api/depin/update-check/run-now")
+def api_depin_update_check_run_now(_: Auth, bg: BackgroundTasks):
+    global _depin_check_running
+    if _depin_check_running:
+        raise HTTPException(status_code=409, detail="Update check already in progress")
+    _depin_check_running = True
+    bg.add_task(_run_depin_update_check)
+    return {"ok": True, "started": True}
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
