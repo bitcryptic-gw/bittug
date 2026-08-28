@@ -21,6 +21,7 @@ ExecStart=/usr/bin/docker run \
   -v /var/lib/gateway-ui/anyone/run:/run/anon \
   ghcr.io/anyone-protocol/ator-protocol:latest \
   anon -f /etc/anon/anonrc
+ExecStartPost=/opt/gateway/scripts/depin-version-boot.sh anyone
 Restart=on-failure
 RestartSec=15
 StandardOutput=journal

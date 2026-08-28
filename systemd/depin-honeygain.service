@@ -19,6 +19,7 @@ ExecStart=/usr/bin/docker run \
   -device ${DEPIN_DEVICE_NAME} \
   -email ${DEPIN_HONEYGAIN_EMAIL} \
   -pass ${DEPIN_HONEYGAIN_PASSWORD}
+ExecStartPost=/opt/gateway/scripts/depin-version-boot.sh honeygain
 Restart=on-failure
 RestartSec=15
 StandardOutput=journal

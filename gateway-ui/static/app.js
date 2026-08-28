@@ -2152,14 +2152,20 @@ function depinUpdateControls(project, d) {
     ? `<div class="warn-text depin-check-warn">Update check failed: ${escHtml(s.update_last_error)}</div>`
     : '';
   // Bests-available version line: real captured version when we have one,
-  // otherwise Task 1's digest+date. One line, never both.
+  // Best-available version line: real captured version, else Task 1's
+  // digest+date, else just the build date. One line, never more than one. The
+  // bare build-date branch matters for the post-reboot race where a check
+  // cycle ran before the images were inspectable (local_digest empty but
+  // image_created present) — show the date rather than rendering nothing.
   const versionLine = s.captured_version
     ? `<div class="depin-check-meta dim">Version ${escHtml(s.captured_version)}</div>`
     : (s.local_digest
         ? `<div class="depin-check-meta dim">
       Image ${escHtml(shortDigest(s.local_digest))}${s.image_created ? ` (built ${fmtTimestamp(s.image_created)})` : ''}
     </div>`
-        : '');
+        : (s.image_created
+            ? `<div class="depin-check-meta dim">Built ${fmtTimestamp(s.image_created)}</div>`
+            : ''));
   // While a restart is still in the extended polling window, be honest that the
   // service is coming back up rather than presenting a transient (Honeygain's
   // known slow settle starts on "Error" for ~20-30s) as a settled failure.
