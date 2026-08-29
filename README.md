@@ -54,12 +54,14 @@ Pre-built images are available on the [Releases](https://github.com/bitcryptic-g
 
 1. Download the latest `.img.xz` from [Releases](https://github.com/bitcryptic-gw/bittug/releases) and verify the SHA256 checksum.
 2. Flash it to a microSD card using Raspberry Pi Imager — no Customisation or settings step needed.
-3. Insert the card into the SenseCap M1 and power on.
+3. Insert the card into your Pi (or the SenseCap M1, if that's your hardware) and power on.
 4. Wait for first boot to complete — this clones the repo, runs `boot/bootstrap.sh`, and reboots automatically. Takes a few minutes.
 5. SSH in using the default account: `ssh sensecap@<hostname-or-ip>`, password `sensecap`. You'll be required to set a new password immediately — this is enforced, not optional.
 6. The web UI is now available at `http://<hostname>:8080`. The bearer token (separate from your SSH login — this authenticates the web UI, not SSH) is printed to the console during first boot; recover it any time via `sudo cat /etc/gateway-ui/token`.
 
 **Default credentials:** username `sensecap`, password `sensecap`. Full sudo, SSH enabled. This is a published, well-known default — anyone with the public image knows it. The forced password change on first login (enforced, not optional) is what makes that safe. Don't expose the device to the open internet before changing it.
+
+*(The default account and hostname prefix are named `sensecap` for historical/hardware-identity reasons, independent of the BitTug project rename — see [CHANGELOG.md](CHANGELOG.md).)*
 
 If you'd rather configure your own username, password, or SSH key instead of using the default account, you can do so via Raspberry Pi Imager's Customisation step (the gear icon) — but this is not available when flashing via **"Use custom"** with a custom `.img.xz` file in at least Imager v2.0.10. If your version or method of Imager does support it (e.g. the `rpi-imager` CLI may behave differently), your configured credentials work as normal and the default account is never created (the first-boot script checks for an existing user first).
 
@@ -126,7 +128,7 @@ Band is configured from the **Applications** tab in the web UI. To change band a
 LoRa devices (nodes)
        │  RF
        ▼
-RAK2287 concentrator (SX1302 via SPI /dev/spidev0.0)
+Helium-class concentrator (SX1302 via SPI /dev/spidev0.0 — RAK2287 shown; see Hardware Requirements)
        │  UDP 127.0.0.1:1680
        ▼
 lora_pkt_fwd  [pktfwd.service]
@@ -138,7 +140,7 @@ gateway-rs  [gateway-rs.service]
 Helium IoT Network (mainnet)
 ```
 
-- `pktfwd.service` runs the Semtech packet forwarder, which handles SX1302 hardware and forwards raw LoRa packets as UDP datagrams
+- `pktfwd.service` runs the Semtech packet forwarder, which handles the SX1302-family concentrator hardware and forwards raw LoRa packets as UDP datagrams
 - `gateway-rs.service` runs the native `helium_gateway` binary, connecting to the Helium mainnet using the ECC608A secure element for identity
 - Tailscale is optional; managed via the web UI Network tab using a setuid wrapper (no sudo required)
 - **Docker** is installed on the device and available for operator use, but is not used by any part of the Helium or Wingbits stack
@@ -207,6 +209,8 @@ The `wingbits-setup-wrapper` setuid binary (`/usr/local/bin/wingbits-setup-wrapp
 ---
 
 ## Building from Source
+
+The steps below are for the SX1302-family concentrator (e.g. RAK2287), which is the currently tested and documented path. If you're building for a different Helium-class concentrator chipset, the packet-forwarder build process will differ — see the upstream hardware vendor's documentation for the appropriate packet forwarder repository.
 
 The `lora_pkt_fwd` binary must be compiled from the Semtech sx1302_hal repository for the RAK2287 / SX1302 hardware.
 
@@ -284,7 +288,7 @@ sudo ln -sf /opt/gateway/scripts/reset_lgw.sh /opt/gateway/pktfwd/reset_lgw.sh
 
 ## Contributing
 
-This project is hardware-specific by design. Contributions welcome for:
+This project is hardware-agnostic by design. Contributions welcome for:
 
 - Bug fixes and correctness improvements
 - Additional frequency plan configs (verified against Helium network requirements)
