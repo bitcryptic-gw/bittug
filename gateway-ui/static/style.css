@@ -97,7 +97,14 @@ html, body {
   flex-shrink: 0;
 }
 
-.header-brand { display: flex; align-items: baseline; gap: .75rem; }
+.header-brand { display: flex; align-items: center; gap: .6rem; }
+
+.brand-icon {
+  display: block;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+}
 
 .brand-name {
   font-family: var(--mono);
@@ -109,7 +116,7 @@ html, body {
 }
 
 .brand-sub { color: var(--text-dim); font-size: .85rem; }
-.brand-sub + .brand-sub::before { content: "—"; margin-right: .75rem; color: var(--text-dim); }
+#header-version::before { content: "—"; margin-right: .75rem; color: var(--text-dim); }
 
 .update-badge {
   font-size: .75rem;

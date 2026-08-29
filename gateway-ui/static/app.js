@@ -1858,7 +1858,6 @@ async function copyToken() {
 
 async function setHeaderInfo() {
   try {
-    document.getElementById('header-name').textContent = 'BitCryptic™ OS';
     const ver = await api('/api/system/version');
     state.cachedVersion = ver;
     const headerVer = document.getElementById('header-version');
