@@ -90,7 +90,7 @@ sudo cat /etc/gateway-ui/token
 | **Live Log** | Unified journal stream with filter pills: System / Helium / Wingbits / Tailscale |
 | **Settings** | OTA updates (version check, changelog, smart service restart, SSE stream), bearer token display and regenerate |
 
-The header bar shows the current build version (`BitTug — BitCryptic™ OS vYYYY.MM.DD`). An amber **⬆ Update available** badge appears when a newer GitHub release is detected; clicking navigates to the Settings OTA section.
+The header bar shows the current build version alongside the brand (`BitTug vYYYY.MM.DD`). An amber **⬆ Update available** badge appears when a newer GitHub release is detected; clicking navigates to the Settings OTA section.
 
 *All screenshots taken on desktop. Mobile layout stacks cards vertically.*
 
