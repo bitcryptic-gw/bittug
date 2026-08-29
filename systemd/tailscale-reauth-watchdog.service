@@ -1,6 +1,6 @@
 [Unit]
 Description=Tailscale user-reauth watchdog (tagged-key fallback)
-Documentation=https://github.com/bitcryptic-gw/sensecap-m1-gateway
+Documentation=https://github.com/bitcryptic-gw/bittug
 # Only meaningful when the web UI has armed a pending reauth.
 ConditionPathExists=/var/lib/gateway-ui/tailscale-reauth.json
 After=network-online.target tailscaled.service

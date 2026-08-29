@@ -4,7 +4,7 @@
 set -euo pipefail
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-REPO_URL="https://github.com/bitcryptic-gw/sensecap-m1-gateway"
+REPO_URL="https://github.com/bitcryptic-gw/bittug"
 REPO_DIR="/opt/gateway"
 CONFIG_TXT_SRC="${REPO_DIR}/boot/config.txt"
 CONFIG_TXT_DST="/boot/firmware/config.txt"
@@ -31,7 +31,7 @@ if [ -z "$PRIMARY_USER" ]; then
 fi
 
 echo "============================================"
-echo "  SenseCap M1 Gateway Bootstrap"
+echo "  BitTug Bootstrap"
 echo "  Hostname:  $(hostname)"
 echo "  User:      ${PRIMARY_USER}"
 echo "  Date:      $(date)"

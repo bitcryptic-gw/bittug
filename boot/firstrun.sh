@@ -1,5 +1,5 @@
 #!/bin/bash
-# firstrun.sh — SenseCap M1 Gateway first-boot provisioning
+# firstrun.sh — BitTug first-boot provisioning
 #
 # HOW THIS WORKS (for transparency):
 #
@@ -32,7 +32,7 @@
 set -euo pipefail
 
 LOG="/var/log/firstrun.log"
-REPO_URL="https://github.com/bitcryptic-gw/sensecap-m1-gateway"
+REPO_URL="https://github.com/bitcryptic-gw/bittug"
 REPO_DIR="/opt/gateway"
 
 # Tee all output to log file and console
@@ -50,7 +50,7 @@ first_interactive_user() {
     done
 }
 
-echo "=== SenseCap M1 Gateway First-Run ==="
+echo "=== BitTug First-Run ==="
 echo "Started: $(date)"
 
 # --- Install git if needed ---

@@ -1,12 +1,12 @@
 #!/bin/bash
-# build-image.sh — Build a flashable SenseCap M1 Gateway image.
+# build-image.sh — Build a flashable BitTug image.
 # Runs locally or in CI. Requires root (for loop device mounting).
 # Usage: sudo ./boot/build-image.sh
 set -euo pipefail
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 WORKDIR="$(mktemp -d)"
-IMG_NAME="sensecap-m1-gateway"
+IMG_NAME="bittug"
 OUTPUT_DIR="${OUTPUT_DIR:-.}"
 IMAGE_VERSION="${IMAGE_VERSION:-$(date +%Y.%m.%d)}"
 
@@ -37,7 +37,7 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-echo "=== SenseCap M1 Gateway Image Builder ==="
+echo "=== BitTug Image Builder ==="
 echo "Started: $(date)"
 echo "Workdir: ${WORKDIR}"
 

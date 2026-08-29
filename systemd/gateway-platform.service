@@ -1,5 +1,5 @@
 [Unit]
-Description=SenseCap M1 Gateway Platform Init
+Description=BitTug Platform Init
 After=network-online.target docker.service
 Wants=network-online.target
 

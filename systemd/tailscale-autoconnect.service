@@ -1,6 +1,6 @@
 [Unit]
 Description=Tailscale automatic re-authentication (saved auth key)
-Documentation=https://github.com/bitcryptic-gw/sensecap-m1-gateway
+Documentation=https://github.com/bitcryptic-gw/bittug
 # Only meaningful once an auth key has been persisted (by first-boot.sh or a
 # successful web-UI auth). Without the key file the unit is skipped cleanly.
 ConditionPathExists=/etc/gateway/tailscale.key

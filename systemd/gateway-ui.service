@@ -1,5 +1,5 @@
 [Unit]
-Description=SenseCap M1 Gateway Web UI
+Description=BitTug Web UI
 After=network.target
 Wants=network.target
 

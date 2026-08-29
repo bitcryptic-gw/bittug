@@ -1,7 +1,7 @@
 [Unit]
-Description=SenseCap M1 Gateway First-Run Provisioning
+Description=BitTug First-Run Provisioning
 ConditionPathExists=!/etc/gateway-provisioned
-Documentation=https://github.com/bitcryptic-gw/sensecap-m1-gateway
+Documentation=https://github.com/bitcryptic-gw/bittug
 After=network-online.target
 Requires=network-online.target
 After=time-sync.target

@@ -56,7 +56,7 @@ jobs:
       - name: Compute output filename
         id: artifacts
         run: |
-          IMG=$(ls -1 sensecap-m1-gateway-*.img.xz 2>/dev/null | head -1)
+          IMG=$(ls -1 bittug-*.img.xz 2>/dev/null | head -1)
           if [ -z "$IMG" ]; then
             echo "ERROR: No output image found" >&2
             exit 1
@@ -68,9 +68,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
-          name: SenseCap M1 Gateway ${{ steps.version.outputs.tag }}
+          name: BitTug ${{ steps.version.outputs.tag }}
           body: |
-            ## SenseCap M1 Gateway Image
+            ## BitTug Image
 
             ### SHA256 Checksum
             ```
@@ -78,7 +78,7 @@ jobs:
             ```
 
             ### What happens on first boot
-            On first boot, [boot/firstrun.sh](https://github.com/bitcryptic-gw/sensecap-m1-gateway/blob/main/boot/firstrun.sh) clones this repo and runs [boot/bootstrap.sh](https://github.com/bitcryptic-gw/sensecap-m1-gateway/blob/main/boot/bootstrap.sh) to provision the device automatically.
+            On first boot, [boot/firstrun.sh](https://github.com/bitcryptic-gw/bittug/blob/main/boot/firstrun.sh) clones this repo and runs [boot/bootstrap.sh](https://github.com/bitcryptic-gw/bittug/blob/main/boot/bootstrap.sh) to provision the device automatically.
 
             ### Default login
             This image includes a default account for SSH access after first boot:
@@ -94,6 +94,6 @@ jobs:
             created.
 
             ### Setup instructions
-            See the [README](https://github.com/bitcryptic-gw/sensecap-m1-gateway#readme) for full setup instructions after flashing.
+            See the [README](https://github.com/bitcryptic-gw/bittug#readme) for full setup instructions after flashing.
           files: |
             ${{ steps.artifacts.outputs.file }}

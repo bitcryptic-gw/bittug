@@ -1,5 +1,5 @@
 #!/bin/bash
-# First-boot initialisation for SenseCap M1 gateway platform.
+# First-boot initialisation for the BitTug platform.
 # Idempotent — safe to re-run. Skips if sentinel file exists.
 set -euo pipefail
 
@@ -23,7 +23,7 @@ if [ -f "$SENTINEL" ]; then
     exit 0
 fi
 
-log "Starting SenseCap M1 first-boot initialisation..."
+log "Starting BitTug first-boot initialisation..."
 
 # --- Ensure config.env exists ---
 if [ ! -f "$ENV_FILE" ]; then

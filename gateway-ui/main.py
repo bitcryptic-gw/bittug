@@ -1732,7 +1732,7 @@ async def api_tailscale_logout(_: Auth, request: Request):
 
 # ── System / Version ──────────────────────────────────────────────────────────
 
-GITHUB_API = "https://api.github.com/repos/bitcryptic-gw/sensecap-m1-gateway/releases/latest"
+GITHUB_API = "https://api.github.com/repos/bitcryptic-gw/bittug/releases/latest"
 
 
 def _load_github_token() -> str | None:

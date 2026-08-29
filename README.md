@@ -1,6 +1,8 @@
-# SenseCap M1 Gateway Platform
+# BitTug — DePIN Gateway Platform
 
-An open-source replacement firmware platform for the **Seeed SenseCap M1** LoRaWAN gateway, targeting the Helium IoT network.
+> **Formerly known as *sensecap-m1-gateway / SenseCap M1 Gateway*.** See [CHANGELOG.md](CHANGELOG.md) for the rename history.
+
+An open-source, hardware-agnostic DePIN gateway platform, targeting the Helium IoT network and beyond. Originally built as a replacement firmware for the **Seeed SenseCap M1** LoRaWAN gateway, it is now proven working on bare Raspberry Pi 3B/4 hardware — with no SenseCap board and no Helium-class concentrator attached at all.
 
 No hidden services. No telemetry. No third-party backdoors. Fully auditable.
 
@@ -8,7 +10,7 @@ No hidden services. No telemetry. No third-party backdoors. Fully auditable.
 
 ## What This Is
 
-This project replaces the default platform that ships on the SenseCap M1. It provides a clean, minimal stack using only open-source components:
+This project started as a replacement for the default platform that ships on the SenseCap M1. It provides a clean, minimal stack using only open-source components:
 
 - **Semtech `lora_pkt_fwd`** — the reference packet forwarder for the SX1302 concentrator
 - **Helium `gateway-rs`** — lightweight Helium network gateway daemon
@@ -22,19 +24,18 @@ The goal is a gateway you can fully understand, audit, and trust — running on 
 ## What This Is NOT
 
 - Not affiliated with Seeed Studio or the Helium Foundation
-- Not a general-purpose LoRaWAN gateway platform (SenseCap M1 hardware only — no abstraction sprawl)
 - Not a cloud service — your gateway, your keys, your data
 
 ---
 
 ## Hardware Requirements
 
-**This firmware is for SenseCap M1 only.** It will not work on other gateways without significant modification.
+BitTug is hardware-agnostic. It runs on any Raspberry Pi 3B/4/5 (see the original SenseCap M1 reference below) with any Helium-class (SX1302) concentrator attached. The split is modular: the web UI, gateway-rs, and Wingbits stack are Pi-portable, while `lora_pkt_fwd` and `reset_lgw.sh` target the attached concentrator.
 
 | Component | Detail |
 |-----------|--------|
-| SBC | Raspberry Pi 4B (inside SenseCap M1) |
-| Concentrator | RAK2287 (SX1302 / SX1250 SPI) |
+| SBC | Raspberry Pi 3B / 4 / 5 (originally the Pi 4B inside SenseCap M1) |
+| Concentrator | Any Helium-class concentrator (originally RAK2287 / SX1302 SPI) |
 | Secure Element | Microchip ATECC608A on I2C-1 (0x60) |
 | Connectivity | Ethernet (eth0) for Gateway EUI derivation |
 | GPS | None — fake GPS configured in the web UI or `config/` |
@@ -43,7 +44,7 @@ The goal is a gateway you can fully understand, audit, and trust — running on 
 
 ## Flashing a Pre-Built Image
 
-Pre-built images are available on the [Releases](https://github.com/bitcryptic-gw/sensecap-m1-gateway/releases) page.
+Pre-built images are available on the [Releases](https://github.com/bitcryptic-gw/bittug/releases) page.
 
 **Requirements:**
 - Raspberry Pi Imager (available for Windows, Mac, Linux)
@@ -51,7 +52,7 @@ Pre-built images are available on the [Releases](https://github.com/bitcryptic-g
 
 **Steps:**
 
-1. Download the latest `.img.xz` from [Releases](https://github.com/bitcryptic-gw/sensecap-m1-gateway/releases) and verify the SHA256 checksum.
+1. Download the latest `.img.xz` from [Releases](https://github.com/bitcryptic-gw/bittug/releases) and verify the SHA256 checksum.
 2. Flash it to a microSD card using Raspberry Pi Imager — no Customisation or settings step needed.
 3. Insert the card into the SenseCap M1 and power on.
 4. Wait for first boot to complete — this clones the repo, runs `boot/bootstrap.sh`, and reboots automatically. Takes a few minutes.
@@ -87,7 +88,7 @@ sudo cat /etc/gateway-ui/token
 | **Live Log** | Unified journal stream with filter pills: System / Helium / Wingbits / Tailscale |
 | **Settings** | OTA updates (version check, changelog, smart service restart, SSE stream), bearer token display and regenerate |
 
-The header bar shows the current build version (`SenseCap M1 — BitCryptic OS vYYYY.MM.DD`). An amber **⬆ Update available** badge appears when a newer GitHub release is detected; clicking navigates to the Settings OTA section.
+The header bar shows the current build version (`BitTug — BitCryptic™ OS vYYYY.MM.DD`). An amber **⬆ Update available** badge appears when a newer GitHub release is detected; clicking navigates to the Settings OTA section.
 
 *All screenshots taken on desktop. Mobile layout stacks cards vertically.*
 
@@ -290,7 +291,7 @@ This project is hardware-specific by design. Contributions welcome for:
 - Documentation improvements
 - Web UI improvements
 
-**Hardware variant contributions** (e.g. support for RAK2287 over USB, or other concentrator modules) are welcome via PRs — please keep SenseCap M1 behaviour unchanged.
+**Hardware variant contributions** (e.g. support for other concentrator modules or Pi models) are welcome via PRs — please keep existing hardware behaviour unchanged.
 
 Please open an issue before starting large changes.
 
@@ -300,4 +301,4 @@ Please open an issue before starting large changes.
 
 MIT — see [LICENSE](LICENSE).
 
-Copyright (c) 2026 SenseCap M1 Gateway Contributors.
+Copyright (c) 2026 BitTug Contributors.
