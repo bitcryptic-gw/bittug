@@ -238,6 +238,26 @@ else
     log "WARNING: ${INSTALL_DEPIN} not found or not executable"
 fi
 
+# --- Core unit file deployment ---
+# Re-copies the gateway's own OTA-restartable unit files (pktfwd.service,
+# gateway-rs.service, gateway-ui.service) plus the readsb drop-in override
+# into /etc/systemd/system/, then daemon-reloads. Without this, a git pull
+# during OTA that changes one of these files would leave the running systemd
+# with a stale unit definition: systemctl restart after the pull would keep
+# using the old ExecStart/User/limits with no error signal.
+# Idempotent: cp overwrite + daemon-reload are no-op-safe on every OTA cycle.
+# Non-fatal: does not block the rest of provisioning on failure.
+INSTALL_CORE="/opt/gateway/scripts/install-core-services.sh"
+if [ -x "$INSTALL_CORE" ]; then
+    bash -p "$INSTALL_CORE"
+    rc=$?
+    if [ $rc -ne 0 ]; then
+        log "WARNING: install-core-services.sh failed (exit ${rc}) — core unit files may not be deployed"
+    fi
+else
+    log "WARNING: ${INSTALL_CORE} not found or not executable"
+fi
+
 # --- Tailscale reauth watchdog unit deployment ---
 # Installs the tailscale-reauth-watchdog.service oneshot unit used by the
 # gateway-ui Tailscale user-reauth flow (fallback to the saved tagged auth key
