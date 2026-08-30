@@ -14,7 +14,12 @@ WorkingDirectory=/opt/gateway/pktfwd
 # Skip this unit entirely when no Helium concentrator hardware (ATECC608A at
 # i2c-1:0x60) is present — e.g. bare-Pi devices running only the
 # concentrator-free DePIN modules. exit 77 = skipped, not failed.
-ExecCondition=/opt/gateway/scripts/helium-hardware-check.sh
+# pktfwd is the ONLY unit that runs the real I2C probe (probe mode); its
+# result is recorded in /run/gateway/helium-hardware-present and shared with
+# gateway-rs.service's marker-only check, so only one probe happens per boot
+# (the back-to-back double-probe race is eliminated). The probe retries with a
+# settle delay because the ATECC608A can transiently NACK a too-early probe.
+ExecCondition=/opt/gateway/scripts/helium-hardware-check.sh probe
 ExecStartPre=/opt/gateway/scripts/reset_lgw.sh start
 ExecStart=/usr/local/bin/lora_pkt_fwd -c /opt/gateway/config/global_conf.json
 ExecStopPost=/opt/gateway/scripts/reset_lgw.sh stop
