@@ -60,8 +60,13 @@ fi
 SUDOERS_TMP=$(mktemp /tmp/10-gateway-ui.XXXXXX)
 cat > "$SUDOERS_TMP" << 'SUDOERS'
 gateway-ui ALL=(root) NOPASSWD: /bin/systemctl restart gateway-ui
-gateway-ui ALL=(root) NOPASSWD: /bin/systemctl restart pktfwd
-gateway-ui ALL=(root) NOPASSWD: /bin/systemctl restart gateway-rs
+# NOTE: these two grants use the .service suffix to match the EXACT argv the
+# /api/restart/{service} endpoint actually invokes (systemctl restart pktfwd.service).
+# A bare "pktfwd" grant does not match "pktfwd.service" under sudo's exact-match
+# command semantics and falls back to a password prompt (regression observed on
+# field device: "a terminal is required to read the password").
+gateway-ui ALL=(root) NOPASSWD: /bin/systemctl restart pktfwd.service
+gateway-ui ALL=(root) NOPASSWD: /bin/systemctl restart gateway-rs.service
 gateway-ui ALL=(root) NOPASSWD: /opt/gateway/scripts/apply-band.sh
 gateway-ui ALL=(root) NOPASSWD: /opt/gateway/scripts/apply-timezone.sh
 gateway-ui ALL=(root) NOPASSWD: /opt/gateway/scripts/apply-hostname.sh
