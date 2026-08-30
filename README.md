@@ -2,7 +2,9 @@
 
 > **Formerly known as *sensecap-m1-gateway / SenseCap M1 Gateway*.** See [CHANGELOG.md](CHANGELOG.md) for the rename history.
 
-An open-source, hardware-agnostic DePIN gateway platform, targeting the Helium IoT network and beyond. Originally built as a replacement firmware for the **Seeed SenseCap M1** LoRaWAN gateway, it is now proven working on bare Raspberry Pi 3B/4 hardware — with no SenseCap board and no Helium-class concentrator attached at all.
+An open-source, hardware-agnostic DePIN gateway platform for Raspberry Pi. The base platform is just the Pi plus this software stack — from there you choose which DePIN network module(s) to run. **Helium (LoRaWAN)** is the original and most mature module, requiring a Helium-class concentrator attached to the Pi. Alongside it, BitTug also runs **Honeygain, URnetwork, Myst, and Anyone Protocol** — all of which need nothing beyond the Pi itself, no concentrator or LoRa hardware of any kind.
+
+Originally built as a replacement firmware for the **Seeed SenseCap M1** LoRaWAN gateway, the platform has since proven out on bare Raspberry Pi 3B/4 hardware with no SenseCap board and no concentrator attached at all — which is what drove the shift to a modular, hardware-agnostic design.
 
 No hidden services. No telemetry. No third-party backdoors. Fully auditable.
 
@@ -10,14 +12,20 @@ No hidden services. No telemetry. No third-party backdoors. Fully auditable.
 
 ## What This Is
 
-This project started as a replacement for the default platform that ships on the SenseCap M1. It provides a clean, minimal stack using only open-source components:
+BitTug is a Raspberry Pi platform for running DePIN network modules, with a clean, minimal, fully open-source stack. Pick the module(s) that match the hardware you have:
 
+**Concentrator-free modules** (just the Pi — no additional hardware):
+- **Honeygain**, **URnetwork**, **Myst**, **Anyone Protocol** — bandwidth/network-sharing DePIN networks, each running as its own systemd unit
+
+**Helium LoRaWAN module** (Pi + Helium-class concentrator):
 - **Semtech `lora_pkt_fwd`** — the reference packet forwarder for the SX1302 concentrator
 - **Helium `gateway-rs`** — lightweight Helium network gateway daemon
 - **ATECC608A** — on-board secure element for swarm key storage (no software key files)
+
+**Shared across all modules:**
 - **Tailscale** — optional remote access, managed via the web UI using your own auth key, no config file required
 
-The goal is a gateway you can fully understand, audit, and trust — running on hardware you already own.
+The goal is a gateway you can fully understand, audit, and trust — running on hardware you already own, with LoRa/Helium available as one option among several rather than a prerequisite.
 
 ---
 
@@ -25,12 +33,20 @@ The goal is a gateway you can fully understand, audit, and trust — running on 
 
 - Not affiliated with Seeed Studio or the Helium Foundation
 - Not a cloud service — your gateway, your keys, your data
+- Not LoRa-only — the Helium module is optional, not the core requirement
 
 ---
 
 ## Hardware Requirements
 
-BitTug is hardware-agnostic. It runs on any Raspberry Pi 3B/4/5 (see the original SenseCap M1 reference below) with any Helium-class (SX1302) concentrator attached. The split is modular: the web UI, gateway-rs, and Wingbits stack are Pi-portable, while `lora_pkt_fwd` and `reset_lgw.sh` target the attached concentrator.
+The only hardware BitTug actually requires is a Raspberry Pi. Everything past that is module-dependent.
+
+| You want to run… | Hardware needed |
+|---|---|
+| Honeygain / URnetwork / Myst / Anyone Protocol | Raspberry Pi 3B / 4 / 5 — nothing else |
+| Helium LoRaWAN | The above, **plus** any Helium-class (SX1302) concentrator (originally RAK2287 / SX1302 SPI) |
+
+If you're running the Helium module, it additionally needs:
 
 | Component | Detail |
 |-----------|--------|
@@ -40,11 +56,13 @@ BitTug is hardware-agnostic. It runs on any Raspberry Pi 3B/4/5 (see the origina
 | Connectivity | Ethernet (eth0) for Gateway EUI derivation |
 | GPS | None — fake GPS configured in the web UI or `config/` |
 
+The split is modular: the web UI, gateway-rs, and Wingbits stack are Pi-portable and hardware-independent, while `lora_pkt_fwd` and `reset_lgw.sh` are specific to the attached concentrator and only load if you're running the Helium module.
+
 ---
 
 ## Flashing a Pre-Built Image
 
-Pre-built images are available on the [Releases](https://github.com/bitcryptic-gw/bittug/releases) page.
+Pre-built images are available on the [Releases](https://github.com/bitcryptic-gw/bittug/releases) page. The same image works whether or not you have a concentrator attached — Helium simply won't do anything until one is connected and configured.
 
 **Requirements:**
 - Raspberry Pi Imager (available for Windows, Mac, Linux)
@@ -54,7 +72,7 @@ Pre-built images are available on the [Releases](https://github.com/bitcryptic-g
 
 1. Download the latest `.img.xz` from [Releases](https://github.com/bitcryptic-gw/bittug/releases) and verify the SHA256 checksum.
 2. Flash it to a microSD card using Raspberry Pi Imager — no Customisation or settings step needed.
-3. Insert the card into your Pi (or the SenseCap M1, if that's your hardware) and power on.
+3. Insert the card into your Pi (with a concentrator attached if you're using the Helium module — otherwise just the bare Pi) and power on.
 4. Wait for first boot to complete — this clones the repo, runs `boot/bootstrap.sh`, and reboots automatically. Takes a few minutes.
 5. SSH in using the default account: `ssh sensecap@<hostname-or-ip>`, password `sensecap`. You'll be required to set a new password immediately — this is enforced, not optional.
 6. The web UI is now available at `http://<hostname>:8080`. The bearer token (separate from your SSH login — this authenticates the web UI, not SSH) is printed to the console during first boot; recover it any time via `sudo cat /etc/gateway-ui/token`.
@@ -85,7 +103,7 @@ sudo cat /etc/gateway-ui/token
 | Tab | What it shows |
 |-----|---------------|
 | **Dashboard** | Grouped service status (Helium / Wingbits / Tailscale / Web UI), system metrics (CPU / memory / disk) |
-| **Applications** | Helium: gateway identity, beacon stats, LoRa region. Wingbits: status and in-browser setup/reconfiguration flow |
+| **Applications** | Helium: gateway identity, beacon stats, LoRa region (only relevant if you're running the Helium module). Wingbits: status and in-browser setup/reconfiguration flow |
 | **Network** | Interface cards (eth0 / wlan0 / Tailscale), Tailscale auth + options (subnet routing, SSH toggle), web UI port |
 | **Live Log** | Unified journal stream with filter pills: System / Helium / Wingbits / Tailscale |
 | **Settings** | OTA updates (version check, changelog, smart service restart, SSE stream), bearer token display and regenerate |
@@ -103,6 +121,8 @@ The header bar shows the current build version alongside the brand (`BitTug vYYY
 ---
 
 ## Band / Region Selection
+
+*(Applies only if you're running the Helium LoRaWAN module — skip this section if you're not using a concentrator.)*
 
 Band is configured from the **Applications** tab in the web UI. To change band after first boot, select the new region and apply — the forwarder restarts automatically.
 
@@ -123,6 +143,8 @@ Band is configured from the **Applications** tab in the web UI. To change band a
 ---
 
 ## How It Works
+
+*(This diagram shows the Helium LoRaWAN module's data path. The concentrator-free modules — Honeygain, URnetwork, Myst, Anyone Protocol — run independently as their own systemd services and don't touch this path at all.)*
 
 ```
 LoRa devices (nodes)
@@ -209,6 +231,8 @@ The `wingbits-setup-wrapper` setuid binary (`/usr/local/bin/wingbits-setup-wrapp
 ---
 
 ## Building from Source
+
+*(This section covers building the Helium LoRaWAN module. If you're only running the concentrator-free modules — Honeygain, URnetwork, Myst, Anyone Protocol — you don't need any of this.)*
 
 The steps below are for the SX1302-family concentrator (e.g. RAK2287), which is the currently tested and documented path. If you're building for a different Helium-class concentrator chipset, the packet-forwarder build process will differ — see the upstream hardware vendor's documentation for the appropriate packet forwarder repository.
 
