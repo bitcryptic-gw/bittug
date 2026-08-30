@@ -2,9 +2,18 @@
 Description=Helium Gateway (gateway-rs)
 After=pktfwd.service
 Requires=pktfwd.service
+# Bound the restart loop on a permanent failure (e.g. no ATECC608A / no
+# concentrator hardware attached): give up after 5 failures in 300s instead
+# of retrying forever.
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
+# Skip this unit entirely when no Helium concentrator hardware (ATECC608A at
+# i2c-1:0x60) is present — e.g. bare-Pi devices running only the
+# concentrator-free DePIN modules. exit 77 = skipped, not failed.
+ExecCondition=/opt/gateway/scripts/helium-hardware-check.sh
 ExecStart=/usr/local/bin/helium_gateway -c /etc/helium_gateway/settings.toml server
 Restart=always
 RestartSec=15

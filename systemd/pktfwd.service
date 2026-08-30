@@ -2,10 +2,19 @@
 Description=LoRa Packet Forwarder (SenseCap M1 / SX1302 CoreCell)
 After=network.target
 Wants=network.target
+# Bound the restart loop on a permanent failure (e.g. no concentrator
+# hardware attached): give up after 5 failures in 300s instead of retrying
+# forever.
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
 WorkingDirectory=/opt/gateway/pktfwd
+# Skip this unit entirely when no Helium concentrator hardware (ATECC608A at
+# i2c-1:0x60) is present — e.g. bare-Pi devices running only the
+# concentrator-free DePIN modules. exit 77 = skipped, not failed.
+ExecCondition=/opt/gateway/scripts/helium-hardware-check.sh
 ExecStartPre=/opt/gateway/scripts/reset_lgw.sh start
 ExecStart=/usr/local/bin/lora_pkt_fwd -c /opt/gateway/config/global_conf.json
 ExecStopPost=/opt/gateway/scripts/reset_lgw.sh stop

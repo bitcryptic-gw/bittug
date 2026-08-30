@@ -157,8 +157,8 @@ function renderDashServices(d) {
   });
   const groupOrder = ['helium', 'wingbits', 'tailscale', 'web-ui'];
   const labels = { helium: 'Helium', wingbits: 'Wingbits', tailscale: 'Tailscale', 'web-ui': 'Web UI' };
-  const stateClass = { active: 'status-active', fault: 'status-fault', optional: 'status-optional' };
-  const stateLabel = { active: 'active', fault: 'fault', optional: 'not configured' };
+  const stateClass = { active: 'status-active', fault: 'status-fault', optional: 'status-optional', not_configured: 'status-optional' };
+  const stateLabel = { active: 'active', fault: 'fault', optional: 'not configured', not_configured: 'no Helium hardware detected' };
   const el = document.getElementById('dash-services-body');
   el.innerHTML = groupOrder.map(key => {
     const g = d[key] || { group_state: 'optional', units: [] };

@@ -32,6 +32,12 @@ GW_VERSION       = Path("/etc/gateway-version")
 GITHUB_TOKEN_PATH = Path("/etc/gateway-ui/github-token")
 OTA_LOG = Path("/var/log/gateway-ota.log")
 
+# Written by scripts/helium-hardware-check.sh (ExecCondition on
+# pktfwd.service / gateway-rs.service) when Helium concentrator hardware is
+# present; removed when absent. Read here to distinguish a hardware-absent
+# device (Helium "not configured") from a genuine service fault.
+HELIUM_HW_MARKER = Path("/run/gateway/helium-hardware-present")
+
 SERVICE_GROUPS = {
     "helium":    {"label": "Helium",    "units": ["pktfwd.service", "gateway-rs.service"]},
     "wingbits":  {"label": "Wingbits",  "units": ["readsb.service", "wingbits.service"]},
@@ -363,6 +369,27 @@ def _service_group_status(group_key: str) -> dict:
     g = SERVICE_GROUPS.get(group_key)
     if not g:
         return {"label": group_key, "active": 0, "total": 0, "units": [], "group_state": "optional"}
+
+    # Hardware-absent override: on a device with no Helium concentrator
+    # (no ATECC608A at i2c-1:0x60), pktfwd/gateway-rs are condition-skipped
+    # by ExecCondition and sit inactive forever. Report the Helium group as
+    # "not_configured" rather than "fault" so the UI and ntfy do not present
+    # a spurious fault for hardware that was never attached. This is an
+    # early-exit override only — the hardware-present path below is
+    # unchanged.
+    if group_key == "helium" and not HELIUM_HW_MARKER.exists():
+        units = [
+            {"unit": u, "state": "not_configured", "since": ""}
+            for u in g["units"]
+        ]
+        return {
+            "label": g["label"],
+            "active": 0,
+            "total": len(g["units"]),
+            "group_state": "not_configured",
+            "units": units,
+        }
+
     units = []
     active_count = 0
     for u in g["units"]:
