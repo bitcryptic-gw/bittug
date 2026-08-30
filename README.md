@@ -56,6 +56,8 @@ If you're running the Helium module, it additionally needs:
 | Connectivity | Ethernet (eth0) for Gateway EUI derivation |
 | GPS | None — fake GPS configured in the web UI or `config/` |
 
+**Verified to work on the SenseCap M1.** Other Helium-class hardware using the same RAK2287/SX1302 concentrator — e.g. Bobcat and similar miners — should work but is not yet tested. If you run BitTug on other hardware, a report or PR is welcome.
+
 The split is modular: the web UI, gateway-rs, and Wingbits stack are Pi-portable and hardware-independent, while `lora_pkt_fwd` and `reset_lgw.sh` are specific to the attached concentrator and only load if you're running the Helium module.
 
 ---
