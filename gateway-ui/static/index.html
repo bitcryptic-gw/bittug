@@ -312,6 +312,40 @@
             <span class="result-msg" id="depin-uninstall-result-anyone"></span>
           </div>
         </div>
+
+        <div class="card" id="depin-card-mastchain">
+          <div class="card-header"><img src="/static/depin-logos/mastchain.svg" alt="" class="depin-logo"> MastChain</div>
+          <div class="card-body depin-status-body" data-project="mastchain">
+            <div class="spinner"></div>
+          </div>
+          <div class="card-body depin-config-body hidden" data-project="mastchain">
+            <div class="depin-warning">
+              <strong>MastChain credentials:</strong> Unlike MastChain&#8217;s own installer (which bakes your
+              email and token into a world-readable system file and runs as root), BitTug
+              stores them in a root-only file and runs the receiver in an isolated
+              container. What remains: the token is stored in plaintext on disk (readable
+              only by an administrator) and appears in the running container&#8217;s command line
+              and Docker metadata (also administrator-only). Do not reuse a token you use
+              elsewhere.
+            </div>
+            <div class="field-group mt">
+              <label class="field-label" for="mc-email">Email</label>
+              <input type="email" id="mc-email" class="wingbits-input" placeholder="you@example.com" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="field-group mt">
+              <label class="field-label" for="mc-token">Token</label>
+              <input type="password" id="mc-token" class="wingbits-input" placeholder="Token from your MastChain dashboard" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="action-row mt">
+              <button class="btn btn-primary depin-configure-btn" data-project="mastchain">Save &amp; Configure</button>
+              <span class="result-msg" id="depin-result-mastchain"></span>
+            </div>
+          </div>
+          <div class="depin-uninstall-section" id="depin-uninstall-mastchain">
+            <button class="btn btn-danger btn-sm depin-uninstall-btn" data-project="mastchain">Full Uninstall</button>
+            <span class="result-msg" id="depin-uninstall-result-mastchain"></span>
+          </div>
+        </div>
       </div>
     </section>
 

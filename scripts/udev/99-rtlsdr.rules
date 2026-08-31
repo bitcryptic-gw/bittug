@@ -7,3 +7,14 @@
 SUBSYSTEM=="tty", KERNEL=="ttyUSB[0-9]*", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2832", SYMLINK+="rtlsdr0"
 SUBSYSTEM=="tty", KERNEL=="ttyUSB[0-9]*", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2838", SYMLINK+="rtlsdr0"
 SUBSYSTEM=="tty", KERNEL=="ttyUSB[0-9]*", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2840", SYMLINK+="rtlsdr0"
+
+# RTL-SDR USB device nodes openable by non-root container users.
+# MastChain's AIS-catcher container runs with `--user 65534:65534` (nobody) and
+# opens the dongle via /dev/bus/usb; the nodes must be 0666 for that non-root
+# user to reach them. This is the ecosystem-standard rtl-sdr rule (the MastChain
+# .deb ships the same MODE:=0666 lines). Harmless to Wingbits — readsb already
+# opens the dongle as root.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2832", MODE:="0666"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2838", MODE:="0666"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="2840", MODE:="0666"
+

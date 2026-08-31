@@ -16,6 +16,7 @@ declare -A IMAGES=(
     ["urnetwork"]="bringyour/community-provider:g4-latest"
     ["myst"]="mysteriumnetwork/myst:latest"
     ["anyone"]="ghcr.io/anyone-protocol/ator-protocol:latest"
+    ["mastchain"]="ghcr.io/c-man-the-man/mastchain-ais:latest"
 )
 
 mkdir -p /var/lib/gateway-ui

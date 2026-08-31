@@ -9,9 +9,9 @@ set -euo pipefail
 readonly PROJECT="$1"
 
 case "$PROJECT" in
-    honeygain|urnetwork|myst|anyone) ;;
+    honeygain|urnetwork|myst|anyone|mastchain) ;;
     *)
-        echo "ERROR: unknown project '$PROJECT' — must be one of: honeygain, urnetwork, myst, anyone" >&2
+        echo "ERROR: unknown project '$PROJECT' — must be one of: honeygain, urnetwork, myst, anyone, mastchain" >&2
         exit 1
         ;;
 esac
@@ -41,6 +41,10 @@ case "$PROJECT" in
             "/var/lib/gateway-ui/anyone/var"
             "/var/lib/gateway-ui/anyone/run"
         )
+        ;;
+    mastchain)
+        IMAGE="ghcr.io/c-man-the-man/mastchain-ais:latest"
+        CRED_FILE="/etc/gateway-ui/depin/mastchain.env"
         ;;
 esac
 

@@ -13,6 +13,8 @@
 #define DEPIN_DIR      "/etc/gateway-ui/depin"
 #define HONEYGAIN_ENV  "/etc/gateway-ui/depin/honeygain.env"
 #define HONEYGAIN_TMP  "/etc/gateway-ui/depin/.honeygain.env.tmp"
+#define MASTCHAIN_ENV  "/etc/gateway-ui/depin/mastchain.env"
+#define MASTCHAIN_TMP  "/etc/gateway-ui/depin/.mastchain.env.tmp"
 #define ANYONE_ETC     "/var/lib/gateway-ui/anyone/etc"
 #define ANONRC         "/var/lib/gateway-ui/anyone/etc/anonrc"
 #define ANONRC_TMP     "/var/lib/gateway-ui/anyone/etc/.anonrc.tmp"
@@ -20,6 +22,7 @@
 #define MAX_DEVICE_NAME   64
 #define MAX_EMAIL        320
 #define MAX_PASSWORD     128
+#define MAX_TOKEN        512
 #define MAX_NICKNAME      19
 #define MAX_CONTACT      255
 #define MAX_MYFAMILY    2048
@@ -74,6 +77,24 @@ static int is_valid_password(const char *s) {
     size_t len = strlen(s);
     if (len > MAX_PASSWORD)
         return 0;
+    return 1;
+}
+
+static int is_valid_token(const char *s) {
+    /* MastChain dashboard token: non-empty, printable ASCII only (no control
+       chars, no newlines — same guard as honeygain's password), and NO spaces:
+       it must stay a single argv token for `USERPWD <value>` in the unit's
+       ExecStart (a space would split it into two argv entries). */
+    if (!s || *s == '\0')
+        return 0;
+    size_t len = strlen(s);
+    if (len > MAX_TOKEN)
+        return 0;
+    for (; *s; s++) {
+        unsigned char c = (unsigned char)*s;
+        if (c < 0x21 || c > 0x7e)
+            return 0;
+    }
     return 1;
 }
 
@@ -183,6 +204,7 @@ static void cmd_help(void) {
         "\n"
         "Usage:\n"
         "  depin-config-wrapper honeygain <device_name> <email> <password>\n"
+        "  depin-config-wrapper mastchain <email> <token>\n"
         "  depin-config-wrapper anyone     <nickname> <contact> [myfamily]\n");
 }
 
@@ -251,6 +273,36 @@ int main(int argc, char *argv[]) {
         gid_t group = pw->pw_gid;
         ensure_dir(DEPIN_DIR, 0750, owner, group);
         write_file(HONEYGAIN_TMP, HONEYGAIN_ENV, content, 0640, owner, group);
+
+    } else if (strcmp(cmd, "mastchain") == 0) {
+        if (argc != 4) {
+            fprintf(stderr, "ERROR: mastchain requires 2 arguments: <email> <token>\n");
+            return 1;
+        }
+        const char *email = argv[2];
+        const char *token = argv[3];
+
+        if (!is_valid_email(email))
+            die("invalid email");
+        if (!is_valid_token(token))
+            die("invalid token (printable ASCII, no spaces, max 512 chars)");
+
+        /* Email and token are stored as SEPARATE variables — never combined.
+           The USERPWD email:token form is assembled only at command-construction
+           in depin-mastchain.service's ExecStart, so the combined secret never
+           exists at rest in this file. */
+        char content[MAX_LINE * 4];
+        int n = snprintf(content, sizeof(content),
+            "DEPIN_MASTCHAIN_EMAIL=%s\n"
+            "DEPIN_MASTCHAIN_TOKEN=%s\n",
+            email, token);
+        if (n < 0 || (size_t)n >= sizeof(content))
+            die("output too large");
+
+        uid_t owner = 0;
+        gid_t group = pw->pw_gid;
+        ensure_dir(DEPIN_DIR, 0750, owner, group);
+        write_file(MASTCHAIN_TMP, MASTCHAIN_ENV, content, 0640, owner, group);
 
     } else if (strcmp(cmd, "anyone") == 0) {
         if (argc < 4 || argc > 5) {

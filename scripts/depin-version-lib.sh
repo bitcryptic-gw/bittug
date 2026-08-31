@@ -176,10 +176,18 @@ resolve_honeygain_version() {
 
 version_pattern_for() {
     # Echo "pat<TAB>strip-seed" for a log-pattern project, or empty for none.
+    # mastchain: the AIS-catcher startup banner is
+    #   "AIS-catcher (build <date>) v<version>"
+    # — e.g. "AIS-catcher (build Aug 19 2026) v0.00-1-unknown" (observed on the
+    # actual consumed image, Mac-side no-dongle run 2026-08-31). The build date
+    # varies per image rebuild, so the pattern must bridge it; the version token
+    # is the trailing "v<version>" (the fork reports a rolling "0.00-1-unknown"
+    # style version, matching recon's finding that the fork is unversioned).
     case "$1" in
         urnetwork) printf 'Provider [0-9][^ ]* started\ts/^Provider //; s/ started$//';;
         myst)      printf 'Starting Mysterium Node [0-9]+(\\.[0-9]+)+\ts/^Starting Mysterium Node //';;
         anyone)    printf 'Anon version [0-9][^ ]*\ts/^Anon version //';;
+        mastchain) printf 'AIS-catcher .* v[0-9][^ ]*\ts/^AIS-catcher .* v//';;
     esac
 }
 
@@ -228,6 +236,6 @@ capture_version_for() {
     # boot) can pass `-b` (whole current boot) instead of a tight `--since`.
     case "$1" in
         honeygain) resolve_honeygain_version ;;
-        urnetwork|myst|anyone) capture_version_from_log "$1" "$2" "$3" ;;
+        urnetwork|myst|anyone|mastchain) capture_version_from_log "$1" "$2" "$3" ;;
     esac
 }

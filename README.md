@@ -232,6 +232,18 @@ The `wingbits-setup-wrapper` setuid binary (`/usr/local/bin/wingbits-setup-wrapp
 
 ---
 
+## MastChain (AIS-catcher, Optional)
+
+MastChain is an optional DePIN network that rewards AIS (ship-tracking) coverage. It runs as a Docker-based DePIN module (`depin-mastchain.service`) consuming the existing `ghcr.io/c-man-the-man/mastchain-ais` image, and is managed from the **DePIN** tab of the web UI — configure your MastChain email + dashboard token, then enable the toggle.
+
+**Hardware:** an RTL-SDR-class USB dongle is required. Without one attached, the MastChain card shows **"No RTL-SDR hardware detected"** and the service stays cleanly stopped (it is condition-skipped rather than crash-looping).
+
+**One dongle = one spectrum (important):** MastChain receives AIS on ~162 MHz; Wingbits/ADS-B receives on 1090 MHz. A single RTL-SDR dongle cannot serve both, and the dongle can only be opened by one process at a time. A **second dongle is required** to run MastChain on a device that is already feeding Wingbits — enabling MastChain while readsb holds the only dongle will fail at device open. The web UI surfaces this warning on the MastChain card when a single-dongle conflict is detected.
+
+Unlike MastChain's own installer (which bakes your email and token into a world-readable system file and runs the receiver as root), BitTug stores the credentials in a root-only file and runs the receiver in an isolated, non-root container.
+
+---
+
 ## Building from Source
 
 *(This section covers building the Helium LoRaWAN module. If you're only running the concentrator-free modules — Honeygain, URnetwork, Myst, Anyone Protocol — you don't need any of this.)*

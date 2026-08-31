@@ -89,11 +89,11 @@ TS_KEY_RE = re.compile(r"^tskey(-auth)?-[A-Za-z0-9_-]+")
 CIDR_RE   = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2}$")
 ALLOWED_TAILSCALE_UNITS = ["readsb", "wingbits", "tailscaled", "kernel", "sshd", "pktfwd", "gateway-rs"]
 
-DEPIN_PROJECTS = ["honeygain", "urnetwork", "myst", "anyone"]
-DEPIN_PROJECT_RE = re.compile(r"^(honeygain|urnetwork|myst|anyone)$")
+DEPIN_PROJECTS = ["honeygain", "urnetwork", "myst", "anyone", "mastchain"]
+DEPIN_PROJECT_RE = re.compile(r"^(honeygain|urnetwork|myst|anyone|mastchain)$")
 DEPIN_DEVICE_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-]{0,63}$")
 DEPIN_NICKNAME_RE = re.compile(r"^[a-zA-Z0-9]{1,19}$")
-DEPIN_CONFIG_REQUIRED = {"honeygain", "urnetwork", "anyone"}
+DEPIN_CONFIG_REQUIRED = {"honeygain", "urnetwork", "anyone", "mastchain"}
 DEPIN_ENV_DIR = Path("/etc/gateway-ui/depin")
 DEPIN_HEALTH_STATE_DIR = Path("/var/lib/gateway-ui")
 DEPIN_ANONRC = Path("/var/lib/gateway-ui/anyone/etc/anonrc")
@@ -107,7 +107,12 @@ DEPIN_IMAGES = {
     "urnetwork": "bringyour/community-provider:g4-latest",
     "myst": "mysteriumnetwork/myst:latest",
     "anyone": "ghcr.io/anyone-protocol/ator-protocol:latest",
+    "mastchain": "ghcr.io/c-man-the-man/mastchain-ais:latest",
 }
+
+# Sysfs RTL-SDR presence probe shared with the unit's ExecCondition= and the
+# MastChain card's live no-hardware / one-dongle rendering.
+MASTCHAIN_HW_CHECK = "/opt/gateway/scripts/mastchain-hardware-check.sh"
 
 _depin_check_running = False
 _depin_restart_running = False
@@ -130,6 +135,18 @@ DEPIN_HEALTH_PATTERNS = {
     "anyone": {
         "healthy": re.compile(r"\[notice\]", re.IGNORECASE),
         "unhealthy": re.compile(r"\[err\]|\[warn\]", re.IGNORECASE),
+    },
+    "mastchain": {
+        # UNVERIFIED CANDIDATES (design Decision #5) — runtime log format has not
+        # been confirmed (no hardware/account available). These are best-guess
+        # signals from recon + upstream docs, pending the tester's real logs:
+        #   active   — fork keep-alive/heartbeat posts + successful HTTP upload
+        #              (response printed by default)
+        #   inactive — "No devices available" (source-confirmed in the fork), or
+        #              an HTTP 401/403 auth failure from the upload endpoint
+        # DO NOT treat either as settled until the tester captures real output.
+        "active": re.compile(r"keepalive|keep-alive|heartbeat|HTTP/1\.[01] 200", re.IGNORECASE),
+        "inactive": re.compile(r"No devices available|HTTP/1\.[01] 40[13]|Unauthorized", re.IGNORECASE),
     },
 }
 
@@ -2516,6 +2533,8 @@ def _depin_is_configured(project: str) -> bool:
         return DEPIN_URNETWORK_JWT.exists()
     if project == "anyone":
         return DEPIN_ANONRC.exists()
+    if project == "mastchain":
+        return (DEPIN_ENV_DIR / "mastchain.env").exists()
     return False
 
 
@@ -2563,6 +2582,11 @@ def _depin_parse_logs(log_lines: list[str], project: str) -> tuple[str, str]:
             label = "healthy"
         elif patterns.get("unhealthy") and patterns["unhealthy"].search(joined):
             label = "unhealthy"
+    elif project == "mastchain":
+        if patterns.get("active") and patterns["active"].search(joined):
+            label = "active"
+        elif patterns.get("inactive") and patterns["inactive"].search(joined):
+            label = "inactive"
     # Persist confirmed healthy states to disk so they survive gateway-ui restarts.
     # Unhealthy/unknown states are never persisted — a broken container will
     # produce log evidence on the next poll, and the absence of persisted state
@@ -2600,6 +2624,9 @@ def _depin_project_status(project: str) -> dict:
         )
     log_lines = log_out.splitlines() if log_rc == 0 else []
     health_label, raw_logs = _depin_parse_logs(log_lines, project)
+    extra = {}
+    if project == "mastchain":
+        extra = _mastchain_hardware_status()
     return {
         "project": project,
         "installed": installed,
@@ -2616,6 +2643,27 @@ def _depin_project_status(project: str) -> dict:
         "local_digest": _depin_update_state(project).get("local_digest", ""),
         "image_created": _depin_update_state(project).get("image_created", ""),
         "captured_version": _depin_update_state(project).get("captured_version", ""),
+        **extra,
+    }
+
+
+def _mastchain_hardware_status() -> dict:
+    """Live RTL-SDR presence/count + readsb activity for the MastChain card.
+
+    Drives the no-hardware badge and the one-dongle-one-spectrum warning
+    (design §3.4/§3.6). Runs the SAME dependency-free sysfs probe as the unit's
+    ExecCondition=, but as the unprivileged gateway-ui user — sysfs is
+    world-readable so the probe needs no privileges. Re-run on every status
+    poll, so the UI re-renders live when a dongle is plugged/unplugged."""
+    count = 0
+    rc, out, _ = _run([MASTCHAIN_HW_CHECK, "--count"], timeout=5)
+    if rc == 0 and out.strip().isdigit():
+        count = int(out.strip())
+    rc2, out2, _ = _run(["systemctl", "is-active", "readsb.service"], timeout=5)
+    return {
+        "hardware_present": count > 0,
+        "rtlsdr_count": count,
+        "readsb_active": rc2 == 0 and out2.strip() == "active",
     }
 
 
@@ -2643,6 +2691,13 @@ _DEPIN_VERSION_PATTERNS = {
     "urnetwork": re.compile(r"Provider\s+([0-9][^ ]*?)\s+started"),
     "myst":      re.compile(r"Starting Mysterium Node\s+([0-9]+(?:\.[0-9]+)+)"),
     "anyone":    re.compile(r"Anon version\s+([0-9][^ ]*)"),
+    # mastchain: the AIS-catcher startup banner is "AIS-catcher (build <date>)
+    # v<version>" — e.g. "AIS-catcher (build Aug 19 2026) v0.00-1-unknown",
+    # observed on the actual consumed image (Mac-side no-dongle run 2026-08-31).
+    # The build date varies per image rebuild, so the pattern bridges it; the
+    # fork reports a rolling "0.00-1-unknown" style version. Keep in sync with
+    # version_pattern_for in scripts/depin-version-lib.sh.
+    "mastchain": re.compile(r"AIS-catcher\s+.*\sv([0-9][^ ]*)"),
 }
 
 
@@ -2864,6 +2919,28 @@ async def api_depin_configure(_: Auth, project: str, request: Request):
             raise HTTPException(status_code=400, detail="password contains control characters")
 
         rc, out, err = await _run_async([DEPIN_WRAPPER, "honeygain", device_name, email, password], timeout=15)
+
+    elif project == "mastchain":
+        email = str(body.get("email", "")).strip()
+        token = str(body.get("token", "")).strip()
+
+        if not email:
+            raise HTTPException(status_code=400, detail="email is required")
+        if not token:
+            raise HTTPException(status_code=400, detail="token is required")
+        if len(email) > 320:
+            raise HTTPException(status_code=400, detail="email too long")
+        if len(token) > 512:
+            raise HTTPException(status_code=400, detail="token too long")
+        if "@" not in email or "." not in email.split("@")[-1] if "@" in email else True:
+            raise HTTPException(status_code=400, detail="invalid email format")
+        # Token must stay a single argv token for `USERPWD <value>` in the
+        # unit's ExecStart: printable ASCII, no control chars, no spaces
+        # (mirrors is_valid_token in scripts/depin-config-wrapper.c).
+        if any(ord(ch) < 0x21 or ord(ch) > 0x7e for ch in token):
+            raise HTTPException(status_code=400, detail="token contains invalid characters (printable ASCII, no spaces)")
+
+        rc, out, err = await _run_async([DEPIN_WRAPPER, "mastchain", email, token], timeout=15)
 
     elif project == "anyone":
         nickname = str(body.get("nickname", "")).strip()

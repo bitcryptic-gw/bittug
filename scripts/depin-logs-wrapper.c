@@ -19,6 +19,7 @@ static const char *ALLOWED_PROJECTS[] = {
     "urnetwork",
     "myst",
     "anyone",
+    "mastchain",
 };
 #define ALLOWED_COUNT (sizeof(ALLOWED_PROJECTS) / sizeof(ALLOWED_PROJECTS[0]))
 
@@ -41,7 +42,7 @@ int main(int argc, char *argv[]) {
        are rejected outright; bad values are never sanitized or escaped. */
     if (argc != 2 || argv[1][0] == '\0' || !is_allowed(argv[1])) {
         fprintf(stderr, "ERROR: invalid project name — must be one of: "
-                        "honeygain, urnetwork, myst, anyone\n");
+                        "honeygain, urnetwork, myst, anyone, mastchain\n");
         return 1;
     }
 

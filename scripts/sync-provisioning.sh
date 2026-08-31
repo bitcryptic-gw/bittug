@@ -80,6 +80,7 @@ gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker pull honeygain/honeygain\:latest
 gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker pull bringyour/community-provider\:g4-latest
 gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker pull mysteriumnetwork/myst\:latest
 gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker pull ghcr.io/anyone-protocol/ator-protocol\:latest
+gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker pull ghcr.io/c-man-the-man/mastchain-ais\:latest
 gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker run --rm -v /var/lib/gateway-ui/urnetwork\:/root/.urnetwork bringyour/community-provider\:g4-latest auth * -f
 SUDOERS
 chmod 0440 "$SUDOERS_TMP"
@@ -355,6 +356,39 @@ if [ -f "${DEPIN_DIR}/honeygain.env" ]; then
             log "Corrected honeygain.env ownership to root:gateway-ui (was ${cur_owner})" || \
             log "WARNING: Failed to chown ${DEPIN_DIR}/honeygain.env"
     fi
+fi
+
+# MastChain env file durability — fix ownership if file exists
+if [ -f "${DEPIN_DIR}/mastchain.env" ]; then
+    cur_owner=$(stat -c '%U:%G' "${DEPIN_DIR}/mastchain.env" 2>/dev/null || true)
+    if [ "$cur_owner" != "root:gateway-ui" ]; then
+        chown root:gateway-ui "${DEPIN_DIR}/mastchain.env" && \
+            chmod 640 "${DEPIN_DIR}/mastchain.env" && \
+            log "Corrected mastchain.env ownership to root:gateway-ui (was ${cur_owner})" || \
+            log "WARNING: Failed to chown ${DEPIN_DIR}/mastchain.env"
+    fi
+fi
+
+# --- RTL-SDR udev rules deployment (durability) ---
+# Ensures the repo's 99-rtlsdr.rules — the /dev/rtlsdr0 symlink plus the
+# MODE:=0666 USB-node perms that let MastChain's non-root AIS-catcher container
+# (--user 65534:65534) open the dongle via /dev/bus/usb — is deployed and live
+# on already-provisioned devices after an OTA-only update. First boot installs
+# it via install-wingbits-deps.sh; this block keeps it durable for OTA-only
+# updates. Idempotent (cp overwrite + udevadm reload/trigger are no-op-safe),
+# non-fatal, and harmless to Wingbits (readsb opens the dongle as root).
+UDEV_RULES_SRC="/opt/gateway/scripts/udev/99-rtlsdr.rules"
+UDEV_RULES_DST="/etc/udev/rules.d/99-rtlsdr.rules"
+if [ -f "$UDEV_RULES_SRC" ]; then
+    cp "$UDEV_RULES_SRC" "$UDEV_RULES_DST"
+    chmod 644 "$UDEV_RULES_DST"
+    if command -v udevadm &>/dev/null; then
+        udevadm control --reload-rules && udevadm trigger || \
+            log "WARNING: udevadm reload/trigger failed — rules file deployed, may need manual reload"
+    fi
+    log "Deployed RTL-SDR udev rules (99-rtlsdr.rules)"
+else
+    log "WARNING: ${UDEV_RULES_SRC} not found — RTL-SDR udev rules not deployed"
 fi
 
 # URnetwork data directory

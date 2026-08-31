@@ -2100,6 +2100,14 @@ function depinBadge(project, s) {
   const d = s || {};
   if (!d.installed) return '<span class="badge badge-dim">Not installed</span>';
   if (!d.enabled) return '<span class="badge badge-yellow">Disabled</span>';
+  // MastChain with no RTL-SDR attached: the unit is condition-skipped by its
+  // ExecCondition (hardware check), so it sits inactive-by-design. Render that
+  // as an amber "no hardware" state, NOT a red Error — mirroring how Helium
+  // renders a hardware-absent device as "not configured". Live: re-evaluated
+  // on every 30s status poll.
+  if (project === 'mastchain' && d.hardware_present === false) {
+    return '<span class="badge badge-yellow">No RTL-SDR hardware</span>';
+  }
   if (d.service_state === 'active') {
     const cls = d.health === 'unknown' ? 'dim' : d.health === 'connected' || d.health === 'active' || d.health === 'healthy' ? 'green' : 'yellow';
     const label = { connected: 'Active', disconnected: 'Inactive', active: 'Active', inactive: 'Inactive', healthy: 'Active', unhealthy: 'Inactive', unknown: 'Starting' }[d.health] || 'Starting';
@@ -2223,7 +2231,7 @@ function depinMystPortForward(d) {
 function renderDepin(d) {
   const projects = d.projects || {};
   const names = {
-    honeygain: 'Honeygain', urnetwork: 'URnetwork', myst: 'Mysterium', anyone: 'Anyone Protocol'
+    honeygain: 'Honeygain', urnetwork: 'URnetwork', myst: 'Mysterium', anyone: 'Anyone Protocol', mastchain: 'MastChain'
   };
 
   for (const project of Object.keys(names)) {
@@ -2235,6 +2243,13 @@ function renderDepin(d) {
       const parts = [depinBadge(project, s), depinEnabledToggle(project, s)];
       if (!s.configured && s.config_required && s.service_state !== 'active' && s.enabled) {
         parts.push('<div class="depin-config-hint warn-text">Check configuration — configure this project first, then enable it</div>');
+      }
+      // One-dongle-one-spectrum warning (design §3.6): only relevant when a
+      // single RTL-SDR is present AND readsb (Wingbits/ADS-B) is already
+      // holding it. Driven live by the same sysfs probe as the no-hardware
+      // badge, so it appears/disappears as the dongle/Wingbits state changes.
+      if (project === 'mastchain' && s.rtlsdr_count === 1 && s.readsb_active) {
+        parts.push('<div class="depin-warning mt"><strong>Hardware conflict:</strong> MastChain receives AIS on ~162 MHz; Wingbits/ADS-B receives on 1090 MHz. One RTL-SDR dongle cannot serve both, and the dongle can only be opened by one process at a time. A <strong>second dongle is required</strong> to run MastChain on a device that is already feeding Wingbits. Enabling MastChain while readsb holds the only dongle will fail at device open.</div>');
       }
       statusEl.innerHTML =
         '<div class="depin-status-row">' + parts.join('') + '</div>' +
@@ -2268,6 +2283,13 @@ async function depinConfigure(project) {
       if (!body.device_name) { showResult(`depin-result-${project}`, 'Device name is required', true); return; }
       if (!body.email) { showResult(`depin-result-${project}`, 'Email is required', true); return; }
       if (!body.password) { showResult(`depin-result-${project}`, 'Password is required', true); return; }
+    } else if (project === 'mastchain') {
+      body = {
+        email: document.getElementById('mc-email').value.trim(),
+        token: document.getElementById('mc-token').value,
+      };
+      if (!body.email) { showResult(`depin-result-${project}`, 'Email is required', true); return; }
+      if (!body.token) { showResult(`depin-result-${project}`, 'Token is required', true); return; }
     } else if (project === 'anyone') {
       body = {
         nickname: document.getElementById('any-nickname').value.trim(),
@@ -2283,6 +2305,7 @@ async function depinConfigure(project) {
     showResult(`depin-result-${project}`, 'Saved ✓', false);
     document.getElementById(`hg-password`).value = '';
     if (document.getElementById(`any-myfamily`)) document.getElementById(`any-myfamily`).value = '';
+    if (document.getElementById('mc-token')) document.getElementById('mc-token').value = '';
     setTimeout(loadDepin, 500);
   } catch (e) {
     if (e.message !== 'unauthorized') showResult(`depin-result-${project}`, e.message, true);
@@ -2699,12 +2722,13 @@ function wireEvents() {
     const uninstallBtn = e.target.closest('.depin-uninstall-btn');
     if (uninstallBtn) {
       const project = uninstallBtn.dataset.project;
-      const labels = { honeygain: 'Honeygain', urnetwork: 'URnetwork', myst: 'Mysterium', anyone: 'Anyone Protocol' };
+      const labels = { honeygain: 'Honeygain', urnetwork: 'URnetwork', myst: 'Mysterium', anyone: 'Anyone Protocol', mastchain: 'MastChain' };
       const msgs = {
         honeygain: `This will remove the ${labels[project]} container, image, and your saved credentials. You'll need to re-enter your email and password to use Honeygain again.`,
         urnetwork: `This will remove ${labels[project]}'s stored identity and the pulled image. ${labels[project]} will generate a new identity if re-enabled — any accumulated history tied to the current identity will be lost.`,
         myst: `This will remove ${labels[project]}'s wallet, identity, and the pulled image. A new identity will be generated if re-enabled — any accumulated reputation will be lost.`,
         anyone: `This will remove the relay's data and pulled image, but keep your saved nickname/contact settings. The relay will get a new identity if re-enabled — its accumulated reputation will be lost.`,
+        mastchain: `This will remove the ${labels[project]} container, the pulled image, and your saved email/token. You'll need to re-enter them to use MastChain again.`,
       };
       depinUninstall(project, labels[project], msgs[project]);
       return;

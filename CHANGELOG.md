@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-08-31 — MastChain (AIS-catcher) added as the 5th DePIN module
+
+**Why:** Adds MastChain AIS (ship-tracking) coverage-earning as a Docker-based
+DePIN module alongside Honeygain/URnetwork/Myst/Anyone — consuming the existing
+`ghcr.io/c-man-the-man/mastchain-ais` image (built from the MastChain mastradar
+fork), not a self-hosted build.
+
+**What changed:**
+- New `systemd/depin-mastchain.service` wrapping `docker run`, with the
+  `ExecCondition=` RTL-SDR hardware gate (exit 77 = skipped, not failed — same
+  mechanism as the Helium hardware fix), `--device /dev/bus/usb` passthrough,
+  non-root `--user` override, and `--memory=128m --cpus=0.5`.
+- Credentials stored file-based at `/etc/gateway-ui/depin/mastchain.env`
+  (separate email + token, `640 root:gateway-ui`), combined into `USERPWD
+  email:token` only in the unit's `ExecStart` — no world-readable credential
+  file and no `User=root`, fixing MastChain's own installer's exposure.
+- New `scripts/mastchain-hardware-check.sh` sysfs RTL-SDR presence probe
+  (ExecCondition + live UI no-hardware / one-dongle-warning rendering).
+- `depin-config-wrapper` gained a `mastchain <email> <token>` subcommand;
+  `depin-logs-wrapper` allowlist, update-check IMAGES map, uninstall script, and
+  `sync-provisioning.sh` (env-file durability, sudoers pull grant, RTL-SDR
+  `MODE=0666` udev rule) all extended for the 5th project.
+- gateway-ui: DePIN status/configure support + MastChain card with the
+  credential warning and the one-dongle-one-spectrum warning (AIS ~162 MHz vs
+  ADS-B 1090 MHz).
+- Health/status log patterns are shipped as explicitly **unverified
+  candidates** pending confirmation against a real device and account.
+
+**Not done (per design):** no general user-supplied-container feature, no
+`mastcontrol` CLI parity, no on-device image build or registry — the image is
+consumed.
+
 ## 2026-08-30 — README repositioned: LoRa/Helium is optional, not required
 
 **Why:** The README read as though a LoRa/Helium concentrator board was a
