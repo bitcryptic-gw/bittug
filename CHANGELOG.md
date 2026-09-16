@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-09-16 — Bound the time-sync wait; surface boot-wait failures at login
+
+**Why:** Two follow-ups from the fresh-flash saga. (1) Round 5 enabled
+`systemd-time-wait-sync.service` to fix a stale-clock/TLS race but left its
+vendor `TimeoutStartSec=infinity`, so a device with no working network at boot
+blocks at `time-sync.target` forever and provisioning never starts — an
+explicitly-accepted trade-off flagged as "revisit later" at the time. (2) The
+Docker-race fix (previous entry) writes `/opt/gateway/.docker-pending` when the
+install fails, but nothing surfaced that at login — a device stuck in that state
+looked normal to a tester.
+
+**What changed:**
+- `boot/build-image.sh` (new step 5c-i): deploy a drop-in,
+  `/etc/systemd/system/systemd-time-wait-sync.service.d/timeout.conf`, setting
+  `TimeoutStartSec=90s`. The binary takes no `--timeout` argument (verified
+  against upstream `units/systemd-time-wait-sync.service.in` and its man page),
+  and the vendor unit's value is `infinity`, so the drop-in is the correct
+  override point. 90s is comfortably above realistic NTP convergence on a flaky
+  link (DHCP + wait-online + timesyncd's first exchange, typically <60s) yet
+  short enough that a genuinely offline device proceeds in ~1.5 min. On timeout
+  the unit fails, `time-sync.target` is still reached (`Before=` ordering, not
+  `Requires=`), and provisioning continues — failure is visible, not a stall.
+- `boot/gateway-provisioning-check.sh`: the round-4 login notice now reports the
+  cause specifically — a time-sync timeout (detected via
+  `systemctl is-failed systemd-time-wait-sync.service`) and/or a failed Docker
+  install (`/opt/gateway/.docker-pending`), pointing at
+  `/var/log/gateway-first-boot.log` and giving the matching remediation. The
+  round-4 no-`exit`/`return` guard (profile.d is sourced) is preserved.
+
+**Not done (by design):** the timeout drop-in is image-build-only, not rolled out
+via OTA — a device already stuck at `time-sync.target` cannot run
+`sync-provisioning.sh` to receive it anyway, and a device that boots with working
+network never hits the unbounded wait.
+
 ## 2026-09-16 — Fresh-boot Docker install race: retry, no permanent silent success
 
 **Why:** A fresh-flash field device (Birnie's `sensecap-rollin`, 2026-09-12)

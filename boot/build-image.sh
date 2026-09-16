@@ -301,6 +301,29 @@ else
     echo "[build] time-sync.target may resolve vacuously — gateway-firstrun.service may fire before clock sync completes"
 fi
 
+# ── 5c-i. Bound the time-sync wait ─────────────────────────────────────────────
+# The unit ships with TimeoutStartSec=infinity (verified against upstream
+# units/systemd-time-wait-sync.service.in), so a device with no working network
+# at boot blocks at time-sync.target forever and provisioning never starts. The
+# binary accepts no --timeout argument (confirmed: no options in its man
+# page/SYNOPSIS), so bound it with a drop-in override instead.
+#
+# 90s reasoning: comfortably above realistic NTP convergence on a flaky link
+# (DHCP + NetworkManager-wait-online + timesyncd's first exchange is typically
+# well under 60s), yet short enough that a genuinely offline device proceeds in
+# ~1.5 minutes rather than hanging indefinitely — so the failure surfaces via
+# the login notice (boot/gateway-provisioning-check.sh, which reads this unit's
+# failed state) instead of silently stalling. On timeout the unit fails,
+# time-sync.target is still reached (Before= ordering, not Requires=), and
+# provisioning continues. A drop-in overrides the vendor unit's value.
+TIME_WAIT_OVERRIDE_DIR="${WORKDIR}/mnt/root/etc/systemd/system/systemd-time-wait-sync.service.d"
+mkdir -p "$TIME_WAIT_OVERRIDE_DIR"
+cat > "${TIME_WAIT_OVERRIDE_DIR}/timeout.conf" << 'TIMESYNCOVERRIDE'
+[Service]
+TimeoutStartSec=90s
+TIMESYNCOVERRIDE
+echo "[build] Bounded systemd-time-wait-sync.service to TimeoutStartSec=90s"
+
 # ── 6. Merge config.txt ───────────────────────────────────────────────────────
 echo ""
 echo "--- Merging config.txt ---"
