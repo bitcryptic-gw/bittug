@@ -4,6 +4,7 @@
 set -euo pipefail
 
 SENTINEL="/opt/gateway/.configured"
+DOCKER_PENDING="/opt/gateway/.docker-pending"
 CONFIG_DIR="/opt/gateway/config"
 ENV_FILE="/opt/gateway/config.env"
 LOG_FILE="/var/log/gateway-first-boot.log"
@@ -16,6 +17,16 @@ log() {
 }
 
 is_numeric() { [[ "${1:-}" =~ ^-?[0-9]+(\.[0-9]+)?$ ]]; }
+
+# Basic boot-time connectivity probe used by the Docker install retry loop:
+# confirms BOTH that DNS resolves get.docker.com AND that the HTTPS fetch the
+# installer depends on actually succeeds. Either can fail independently in the
+# first seconds after boot even when network-online.target has been reached.
+# Cheap (15s cap) and deliberately non-fatal — callers branch on its exit code.
+docker_net_ready() {
+    getent hosts get.docker.com >/dev/null 2>&1 \
+        && curl -fsS -o /dev/null --max-time 15 https://get.docker.com
+}
 
 # --- Idempotency guard ---
 if [ -f "$SENTINEL" ]; then
@@ -137,30 +148,62 @@ fi
 # docker.io (Debian daemon-only package) conflicts with docker-ce and is removed
 # if detected — avoids a partial-Docker state where the daemon runs but no CLI
 # is available. See fix: 2026-07-30 standardize on docker-ce, remove docker.io conflict.
+#
+# Fresh-boot network race (2026-09-12 field failure, sensecap-rollin): this unit
+# runs only seconds after boot, and outbound DNS/HTTPS is frequently not usable
+# yet even though network-online.target has been reached. A single un-retried
+# `curl https://get.docker.com` fails instantly on a not-yet-ready resolver —
+# the same race class already fixed for `git clone` in boot/firstrun.sh (5x/10s
+# retry). Apply the same pattern here, with an explicit connectivity pre-check
+# so "network not ready" is distinguishable from "installer genuinely broken".
+# The failure is NOT swallowed: docker_ok stays false and the .configured
+# sentinel is withheld at the end of this script, so the unit retries next boot.
 
-if command -v docker &>/dev/null; then
+DOCKER_OK=false
+if command -v docker &>/dev/null && docker --version &>/dev/null; then
     log "Docker already installed: $(docker --version)"
+    DOCKER_OK=true
 else
     if dpkg -l docker.io 2>/dev/null | grep -q '^ii'; then
         log "docker.io detected without docker-ce CLI — removing docker.io first"
-        apt-get remove -y -qq docker.io || log "WARNING: Failed to remove docker.io"
+        apt-get remove -y -qq docker.io >>"$LOG_FILE" 2>&1 || \
+            log "WARNING: Failed to remove docker.io"
     fi
-    log "Installing Docker (this may take 30–60 seconds on a Pi)..."
-    if curl -fsSL https://get.docker.com | sh; then
-        log "Docker installed successfully"
-        systemctl enable docker || log "WARNING: Failed to enable docker service"
-        systemctl start  docker || log "WARNING: Failed to start docker service"
+
+    for attempt in 1 2 3 4 5; do
+        if ! docker_net_ready; then
+            log "Docker install attempt ${attempt}/5: network not ready (DNS/HTTPS to get.docker.com failed) — waiting 10s"
+            sleep 10
+            continue
+        fi
+        log "Docker install attempt ${attempt}/5: network OK — running get.docker.com installer (may take 30–60s)..."
+        # Capture the installer's FULL stdout+stderr into the first-boot log.
+        # journald on these devices is volatile and rotates, which made the
+        # original failure's actual error unrecoverable — the generic warning
+        # was the only surviving evidence. tee keeps the journal copy too.
+        if { curl -fsSL https://get.docker.com | sh; } 2>&1 | tee -a "$LOG_FILE"; then
+            DOCKER_OK=true
+            break
+        fi
+        log "Docker install attempt ${attempt}/5 failed — waiting 10s before retry"
+        sleep 10
+    done
+
+    if [ "$DOCKER_OK" = true ]; then
+        log "Docker installed successfully: $(docker --version)"
+        systemctl enable docker >>"$LOG_FILE" 2>&1 || log "WARNING: Failed to enable docker service"
+        systemctl start  docker >>"$LOG_FILE" 2>&1 || log "WARNING: Failed to start docker service"
 
         # Add gateway user to docker group
         GATEWAY_USER=$(stat -c '%U' /opt/gateway 2>/dev/null || echo "")
         if [ -n "$GATEWAY_USER" ] && [ "$GATEWAY_USER" != "root" ]; then
-            usermod -aG docker "$GATEWAY_USER" || \
+            usermod -aG docker "$GATEWAY_USER" >>"$LOG_FILE" 2>&1 || \
                 log "WARNING: Failed to add $GATEWAY_USER to docker group"
             log "Added $GATEWAY_USER to docker group (re-login required to take effect)"
         fi
     else
-        log "WARNING: Docker install failed — continuing without Docker"
-        log "Install manually: curl -fsSL https://get.docker.com | sh"
+        log "ERROR: Docker install failed after 5 attempts (network was reachable before each attempt)."
+        log "       See the installer output above in ${LOG_FILE}. Sentinel will NOT be written; retry on next boot."
     fi
 fi
 
@@ -261,6 +304,19 @@ systemctl enable gateway-ui.service
 systemctl start  gateway-ui.service
 log "gateway-ui.service enabled and started"
 
-# --- Write sentinel ---
-touch "$SENTINEL"
-log "First-boot initialisation complete. Sentinel written to ${SENTINEL}."
+# --- Write sentinel (only when Docker succeeded) ---
+# This sentinel gates gateway-platform.service's ONLY run. Writing it while
+# Docker is missing permanently short-circuits provisioning with no self-heal
+# path — the 2026-09-12 field failure. Withhold it on Docker failure so the
+# unit re-runs first-boot.sh on the next boot; every step above is idempotent,
+# so a full re-run is safe. A marker file is left so the incomplete state is
+# visible on disk (and to the login notice), not just in this log.
+if [ "$DOCKER_OK" = true ]; then
+    rm -f "$DOCKER_PENDING"
+    touch "$SENTINEL"
+    log "First-boot initialisation complete. Sentinel written to ${SENTINEL}."
+else
+    touch "$DOCKER_PENDING"
+    log "First-boot initialisation INCOMPLETE: Docker missing. Sentinel NOT written; gateway-platform will retry on next boot. Marker: ${DOCKER_PENDING}"
+    exit 1
+fi

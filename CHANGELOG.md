@@ -1,5 +1,46 @@
 # Changelog
 
+## 2026-09-16 — Fresh-boot Docker install race: retry, no permanent silent success
+
+**Why:** A fresh-flash field device (Birnie's `sensecap-rollin`, 2026-09-12)
+came up with Docker entirely absent — no CLI, no apt source, no `/etc/docker`.
+`gateway-platform.service` runs `scripts/first-boot.sh` only seconds after boot,
+before outbound DNS/HTTPS is reliably usable, and its
+`curl -fsSL https://get.docker.com | sh` had no retry. It failed on the first
+attempt, the failure was swallowed as a warning, and the provisioning sentinel
+was written anyway — so `gateway-platform.service` short-circuited forever and
+Docker was never retried. Every `depin-*.service` declares
+`Requires=docker.service`, surfacing as `Unit docker.service could not be
+found.` This is the same boot-time network/clock race class already fixed for
+`git clone` in `boot/firstrun.sh` (round 5) — the Docker install was simply
+never given the same treatment.
+
+**What changed:**
+- `systemd/gateway-platform.service`: added `Requires=`/`After=time-sync.target`
+  (mirroring `gateway-firstrun.service`) and promoted `network-online.target`
+  from `Wants=` to `Requires=`. Trade-off documented in the unit: a device that
+  never reaches network-online is left unstarted rather than partly provisioned;
+  this adds no new failure class because the unit is already gated behind
+  `gateway-firstrun.service`'s `Requires=time-sync.target`.
+- `scripts/first-boot.sh`: the Docker install is now a 5-attempt / 10s retry loop
+  behind a `docker_net_ready` pre-check (DNS resolution **and** an HTTPS fetch to
+  `get.docker.com`), so "network not ready" is distinguishable from "installer
+  genuinely broken" in the log. The installer's full stdout+stderr is `tee`'d
+  into `/var/log/gateway-first-boot.log` (journald on these devices is volatile
+  and had already rotated past the original failure).
+- `scripts/first-boot.sh` (recovery path): the `.configured` sentinel is now
+  written **only when Docker succeeded**. On failure a `/opt/gateway/.docker-pending`
+  marker is written and the script exits non-zero, so `gateway-platform.service`
+  re-runs the (idempotent) first-boot flow on the next boot instead of
+  permanently short-circuiting. `sync-provisioning.sh` branch C is unchanged and
+  remains the OTA-time no-op by design — this fix closes the contradiction from
+  the other end.
+
+**Not done (by design):** `sync-provisioning.sh` branch C still does not install
+Docker when the general provisioned sentinel exists — the two recovery paths are
+deliberately not both implemented. Pre-existing affected devices (Birnie's) are
+being unblocked manually, not by this change.
+
 ## 2026-08-31 — MastChain (AIS-catcher) added as the 5th DePIN module
 
 **Why:** Adds MastChain AIS (ship-tracking) coverage-earning as a Docker-based

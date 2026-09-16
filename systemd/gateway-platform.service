@@ -1,7 +1,30 @@
 [Unit]
 Description=BitTug Platform Init
-After=network-online.target docker.service
-Wants=network-online.target
+Documentation=https://github.com/bitcryptic-gw/bittug
+
+# Readiness ordering — mirror gateway-firstrun.service.
+#
+# time-sync.target: with systemd-time-wait-sync.service enabled (round-5 fix)
+# this genuinely blocks until the kernel clock is synchronized, so first-boot
+# cannot run (and cannot attempt the HTTPS Docker install) against a stale
+# clock. Required rather than merely ordered so the unit is not started at all
+# while the target is unresolved.
+#
+# network-online.target: promoted from Wants= to Requires= so the unit is not
+# started until systemd considers the network online. Trade-off, stated rather
+# than silently chosen: on a device that never reaches network-online this unit
+# will be left unstarted/failed instead of starting and partly provisioning.
+# No new failure class is introduced — gateway-platform is already gated behind
+# gateway-firstrun.service, which itself Requires=time-sync.target, and this
+# whole script is internet-dependent. The wait is bounded by the wait-online
+# service timeout, not indefinite. The script's own connectivity pre-check +
+# retry is the authoritative guard; this ordering merely avoids wasted attempts.
+#
+# docker.service: ordering only (After=, no Wants/Requires). On a fresh device
+# Docker does not exist yet — it is installed BY this script — so pulling it in
+# here would be wrong.
+After=network-online.target time-sync.target docker.service
+Requires=network-online.target time-sync.target
 
 [Service]
 Type=oneshot
