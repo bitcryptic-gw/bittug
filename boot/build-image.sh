@@ -262,19 +262,20 @@ else
 fi
 
 # ── 5c. Enable systemd-time-wait-sync.service (honest time-sync.target) ────────
-# gateway-firstrun.service Requires=time-sync.target. On stock Raspberry Pi OS,
-# time-sync.target is satisfied vacuously: nothing depends on an actual clock
-# sync, so it resolves instantly while the device clock is still wrong (a fresh
-# boot has no RTC and carries a stale/default epoch until NTP completes). That
-# let gateway-firstrun.service start with the clock in the past, which makes
-# `git clone` over HTTPS fail TLS cert validation ("server verification failed:
-# certificate error" — GitHub's current cert is not valid as of the stale date)
-# and defeats the whole fresh-flash flow.
+# gateway-firstrun.service is ordered After=time-sync.target. On stock Raspberry
+# Pi OS, time-sync.target is satisfied vacuously: nothing depends on an actual
+# clock sync, so it resolves instantly while the device clock is still wrong (a
+# fresh boot has no RTC and carries a stale/default epoch until NTP completes).
+# That let gateway-firstrun.service start with the clock in the past, which
+# makes `git clone` over HTTPS fail TLS cert validation ("server verification
+# failed: certificate error" — GitHub's current cert is not valid as of the
+# stale date) and defeats the whole fresh-flash flow.
 #
 # Enabling systemd-time-wait-sync.service makes time-sync.target genuinely wait:
 # the unit (in the base image) declares Before=time-sync.target and its oneshot
 # ExecStart blocks until the kernel clock is reported synchronized, so the clock
-# is confirmed-correct (or time-sync blocks) before clone can run.
+# is confirmed-correct before the clone is attempted. If the bounded wait times
+# out instead, firstrun proceeds and its clone retry loop absorbs the transient.
 #
 # Canonical enablement: the unit's [Install] is WantedBy=sysinit.target, and its
 # own [Unit] has Before=time-sync.target. Matching what `systemctl enable`
@@ -313,9 +314,10 @@ fi
 # well under 60s), yet short enough that a genuinely offline device proceeds in
 # ~1.5 minutes rather than hanging indefinitely — so the failure surfaces via
 # the login notice (boot/gateway-provisioning-check.sh, which reads this unit's
-# failed state) instead of silently stalling. On timeout the unit fails,
-# time-sync.target is still reached (Before= ordering, not Requires=), and
-# provisioning continues. A drop-in overrides the vendor unit's value.
+# failed state) instead of silently stalling. On timeout the unit fails and
+# time-sync.target is still reached; because gateway-firstrun.service is ordered
+# after the target without Requires=, provisioning still proceeds (and its clone
+# retry absorbs a still-stale clock). A drop-in overrides the vendor unit's value.
 TIME_WAIT_OVERRIDE_DIR="${WORKDIR}/mnt/root/etc/systemd/system/systemd-time-wait-sync.service.d"
 mkdir -p "$TIME_WAIT_OVERRIDE_DIR"
 cat > "${TIME_WAIT_OVERRIDE_DIR}/timeout.conf" << 'TIMESYNCOVERRIDE'
@@ -323,6 +325,22 @@ cat > "${TIME_WAIT_OVERRIDE_DIR}/timeout.conf" << 'TIMESYNCOVERRIDE'
 TimeoutStartSec=90s
 TIMESYNCOVERRIDE
 echo "[build] Bounded systemd-time-wait-sync.service to TimeoutStartSec=90s"
+
+# ── 5c-ii. Persist the system journal (diagnostic) ─────────────────────────────
+# journald is volatile by default on these images, so the only record of a
+# failed first boot is lost on power-off. That cost a full diagnostic round: the
+# failed acceptance boot's gateway-firstrun reason could not be recovered from
+# the powered-off SD card. Drop in Storage=persistent so the journal survives
+# power-off and can be read off the card later. journald creates /var/log/journal
+# with the correct ownership on next boot; SystemMaxUse bounds SD wear.
+JOURNALD_OVERRIDE_DIR="${WORKDIR}/mnt/root/etc/systemd/journald.conf.d"
+mkdir -p "$JOURNALD_OVERRIDE_DIR"
+cat > "${JOURNALD_OVERRIDE_DIR}/persistent.conf" << 'JOURNALDOVERRIDE'
+[Journal]
+Storage=persistent
+SystemMaxUse=200M
+JOURNALDOVERRIDE
+echo "[build] Enabled persistent journald (Storage=persistent, SystemMaxUse=200M)"
 
 # ── 6. Merge config.txt ───────────────────────────────────────────────────────
 echo ""

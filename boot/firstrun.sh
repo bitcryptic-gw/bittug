@@ -31,6 +31,12 @@
 # account" block below.
 set -euo pipefail
 
+# Diagnostic: on any failure, name the exact line before the script exits.
+# A failed first boot can leave SSH closed and console input unresponsive, so
+# the persisted /var/log/firstrun.log (and journal+console output) is often the
+# only evidence of where provisioning died.
+trap 'echo "[firstrun] ERROR: command failed at line ${LINENO} (exit ${?}) — provisioning incomplete" >&2' ERR
+
 LOG="/var/log/firstrun.log"
 REPO_URL="https://github.com/bitcryptic-gw/bittug"
 REPO_DIR="/opt/gateway"

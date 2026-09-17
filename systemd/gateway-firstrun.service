@@ -4,15 +4,22 @@ ConditionPathExists=!/etc/gateway-provisioned
 Documentation=https://github.com/bitcryptic-gw/bittug
 After=network-online.target
 Requires=network-online.target
+# Ordering only (no Requires=) on time-sync.target. systemd-time-wait-sync.service
+# is bounded by a TimeoutStartSec=90s drop-in and may legitimately fail on an
+# offline boot; a hard Requires= would not propagate that failure anyway (the
+# vendor unit only Wants=/Before= the target), and the authoritative guard
+# against a stale clock is the git-clone retry loop in firstrun.sh.
 After=time-sync.target
-Requires=time-sync.target
 
 [Service]
 Type=oneshot
 ExecStart=/boot/firmware/firstrun.sh
 TimeoutStartSec=600
-StandardOutput=journal
-StandardError=journal
+# journal+console: on a failed fresh boot SSH may be closed and console input
+# dead, leaving the HDMI console as the only observable channel. Mirror the
+# provisioning output there so a failure is visible on screen.
+StandardOutput=journal+console
+StandardError=journal+console
 SyslogIdentifier=gateway-firstrun
 RemainAfterExit=yes
 

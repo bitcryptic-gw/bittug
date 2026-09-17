@@ -1,5 +1,46 @@
 # Changelog
 
+## 2026-09-17 — Relax firstrun/platform time-sync dependency; add boot diagnostics
+
+**Why:** The v2026.09.17 real-device acceptance boot (spare Pi 3B, ethernet
+unplugged ~4 min) showed `systemd-time-wait-sync.service` FAILED (the
+`TimeoutStartSec=90s` drop-in firing as designed), `time-sync.target` reached
+OK, and `gateway-firstrun.service` FAILED to start. The working hypothesis was
+that `gateway-firstrun.service`'s hard `Requires=time-sync.target` propagated
+the member's failure to the dependent unit.
+
+**Verified (not assumed):** A container reproduction on systemd 257.13 (same
+major as the device) using the **real vendor units** — `systemd-time-wait-sync`
+forced to fail via a short `TimeoutStartSec` drop-in — shows the hypothesis is
+**false**: `time-sync.target` reaches `active`, and a dependent with
+`Requires=`+`After=` on it starts normally. The vendor unit only declares
+`Before=`/`Wants=` the target (the target does not require the service), so
+`Requires=time-sync.target` cannot propagate the timeout. The same holds for the
+`network-online.target` shape. Failure only propagates when the target *itself*
+`Requires=` the failing unit. The observed `gateway-firstrun` failure therefore
+has a different, still-unidentified cause; this change is **hardening, not the
+confirmed fix**.
+
+**What changed:**
+- `systemd/gateway-firstrun.service`, `systemd/gateway-platform.service`: dropped
+  `Requires=time-sync.target`, keeping `After=time-sync.target`. The authoritative
+  guard against a stale clock is the `git clone` / connectivity retry logic, not
+  the target's clean success. `Requires=network-online.target` retained
+  (deliberate, documented trade-off).
+- `systemd/gateway-firstrun.service`: `StandardOutput=`/`StandardError=` are now
+  `journal+console`, so first-run provisioning output is visible on the HDMI
+  console even when SSH is closed and console input is dead.
+- `boot/firstrun.sh`: an `ERR` trap logs the exact failing line before exit, so a
+  failed run names where it died in the persistent log/console.
+- `boot/build-image.sh`: drop-in `journald.conf.d/persistent.conf`
+  (`Storage=persistent`, `SystemMaxUse=200M`) so the journal survives power-off
+  and can be read off the SD card — journal volatility is what made this boot's
+  failure reason unrecoverable. Stale comments corrected.
+
+**Follow-up:** Re-flash and re-run the offline-boot acceptance test; with
+persistent journal + console output the next failure (if any) will report its
+own cause instead of requiring a flash-cycle bisect.
+
 ## 2026-09-16 — Bound the time-sync wait; surface boot-wait failures at login
 
 **Why:** Two follow-ups from the fresh-flash saga. (1) Round 5 enabled

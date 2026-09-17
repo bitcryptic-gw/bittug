@@ -4,18 +4,17 @@ Documentation=https://github.com/bitcryptic-gw/bittug
 
 # Readiness ordering — mirror gateway-firstrun.service.
 #
-# time-sync.target: with systemd-time-wait-sync.service enabled (round-5 fix)
-# this genuinely blocks until the kernel clock is synchronized, so first-boot
-# cannot run (and cannot attempt the HTTPS Docker install) against a stale
-# clock. Required rather than merely ordered so the unit is not started at all
-# while the target is unresolved.
+# time-sync.target: ordered After= the target, deliberately NOT Requires=.
+# systemd-time-wait-sync.service is bounded by a TimeoutStartSec=90s drop-in and
+# may legitimately fail on an offline boot; a hard Requires= would not even
+# propagate that failure (the vendor unit only Wants=/Before= the target). The
+# authority on "is the clock usable" is the connectivity pre-check + retry in
+# first-boot.sh, not the target's clean success.
 #
-# network-online.target: promoted from Wants= to Requires= so the unit is not
-# started until systemd considers the network online. Trade-off, stated rather
-# than silently chosen: on a device that never reaches network-online this unit
-# will be left unstarted/failed instead of starting and partly provisioning.
-# No new failure class is introduced — gateway-platform is already gated behind
-# gateway-firstrun.service, which itself Requires=time-sync.target, and this
+# network-online.target: kept as Requires= so the unit is not started at all
+# until systemd considers the network online. Trade-off, stated rather than
+# silently chosen: on a device that never reaches network-online this unit will
+# be left unstarted/failed instead of starting and partly provisioning. This
 # whole script is internet-dependent. The wait is bounded by the wait-online
 # service timeout, not indefinite. The script's own connectivity pre-check +
 # retry is the authoritative guard; this ordering merely avoids wasted attempts.
@@ -24,7 +23,7 @@ Documentation=https://github.com/bitcryptic-gw/bittug
 # Docker does not exist yet — it is installed BY this script — so pulling it in
 # here would be wrong.
 After=network-online.target time-sync.target docker.service
-Requires=network-online.target time-sync.target
+Requires=network-online.target
 
 [Service]
 Type=oneshot
