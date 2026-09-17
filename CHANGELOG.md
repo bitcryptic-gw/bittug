@@ -1,5 +1,49 @@
 # Changelog
 
+## 2026-09-17 — network-online.target false positive with no cable; gate firstrun on a real link
+
+**Why:** The v2026.09.17.x acceptance boot (post-586cb74) showed
+`network-online.target` reached while the ethernet cable was unplugged for the entire
+window — `gateway-firstrun` ran through all 6 DNS retries (~60s) and failed before the
+cable was ever connected. The DNS retry was correct; the network precondition it trusted
+was false.
+
+**Root cause (confirmed):** `NetworkManager-wait-online.service` runs `nm-online -s`
+(`--wait-for-startup`). NetworkManager 1.52.1's man page: `-s` returns once NM logs
+"startup complete", and "After startup has completed, nm-online -s will just return
+immediately, regardless of the current network state"; the Debian trixie unit's own
+comment notes devices reach a "conclusive activated or deactivated state" (deactivated,
+with no carrier). So the unit succeeds, the target is reached, and firstrun runs with no
+link.
+
+**What changed:**
+- `boot/build-image.sh` (5a): drop-in
+  `/etc/systemd/system/NetworkManager-wait-online.service.d/require-connection.conf`
+  clears the vendor `ExecStart` and replaces it with `/usr/bin/nm-online -q`, so the unit
+  waits for a genuinely-activated connection and fails (rather than falsely succeeding)
+  when offline.
+- `boot/firstrun.sh`: new `wait_for_link()` — waits for an interface with carrier
+  (`LOWER_UP`) AND a default route, up to 6 min — before the existing `wait_for_dns()` and
+  apt steps. This is the effective gate: systemd targets aggregate `Wants=` weakly, so
+  `network-online.target`'s "reached" state cannot itself be a hard gate without breaking
+  the connect-later workflow.
+- `systemd/gateway-firstrun.service`: `TimeoutStartSec` 600 → 1200 to cover the added link
+  wait plus clone/bootstrap.
+- `wait_for_dns()` is unchanged and still applies; the boot/ssh fix is untouched.
+
+**Verified:** `wait_for_link` (extracted verbatim from the repo) run against real kernel
+carrier states: no route → fail; carrier + route → pass; **route present but link
+`NO-CARRIER` (the false-positive condition) → fail**. The systemd drop-in was verified to
+replace the vendor ExecStart with `/usr/bin/nm-online -q`. A full firstrun re-run with a
+carrier + route and DNS blackholed-then-released still completes (exit 0). The `nm-online
+-s` false positive itself could not be reproduced in a container (no udev/systemd → NM
+marks test devices unmanaged and never logs "startup complete"); the mechanism is
+confirmed from NetworkManager 1.52.1's man page and the Debian trixie unit. The physical
+unplug test on the spare Pi is the remaining confirmation.
+
+**Follow-up:** Fresh-flash with no cable, connect after ~4 min; expect firstrun to wait for
+the link, then provision.
+
 ## 2026-09-17 — Fix DNS-readiness race in firstrun.sh; ship SSH-enable marker in the image
 
 **Why:** The v2026.09.17 fresh-flash acceptance boot (post-55f9b32) failed, but the

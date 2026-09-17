@@ -236,11 +236,18 @@ ln -sf /etc/systemd/system/gateway-firstrun.service \
     "${WORKDIR}/mnt/root/etc/systemd/system/multi-user.target.wants/gateway-firstrun.service"
 echo "[build] Enabled gateway-firstrun.service for multi-user.target"
 
-# ── 5a. Ensure NetworkManager-wait-online.service is enabled ──────────────────
+# ── 5a. Enable NetworkManager-wait-online.service and require a real connection ─
 # gateway-firstrun.service Requires=network-online.target. Without
-# NetworkManager-wait-online.service enabled, network-online.target
-# resolves instantly with nothing behind it — a non-signal that would
-# let gateway-firstrun.service fire before DHCP completes.
+# NetworkManager-wait-online.service enabled, network-online.target resolves
+# instantly with nothing behind it.
+#
+# Enabling the vendor unit is NOT enough, though: it runs `nm-online -s`
+# (--wait-for-startup), which returns the moment NetworkManager logs "startup
+# complete" — a state NM reaches with every device conclusively *deactivated*
+# when no cable is plugged in. So network-online.target was still "reached" with
+# no link (confirmed on real hardware, v2026.09.17). The drop-in below removes
+# `-s` so the unit waits for an actually-activated connection, and fails (rather
+# than falsely succeeding) when there is none.
 echo ""
 echo "--- Enabling NetworkManager-wait-online.service ---"
 NM_WAIT_SRC="/lib/systemd/system/NetworkManager-wait-online.service"
@@ -259,6 +266,17 @@ else
     echo "[build] WARNING: NetworkManager-wait-online.service not found in base image"
     echo "[build] network-online.target may resolve instantly — gateway-firstrun.service may fire before DHCP completes"
 fi
+
+# Drop `-s` from nm-online so wait-online requires an actual connection. Clearing
+# ExecStart= first is required to replace the vendor ExecStart=.
+NM_WAIT_OVERRIDE_DIR="${WORKDIR}/mnt/root/etc/systemd/system/NetworkManager-wait-online.service.d"
+mkdir -p "$NM_WAIT_OVERRIDE_DIR"
+cat > "${NM_WAIT_OVERRIDE_DIR}/require-connection.conf" << 'NMWAITOVERRIDE'
+[Service]
+ExecStart=
+ExecStart=/usr/bin/nm-online -q
+NMWAITOVERRIDE
+echo "[build] NetworkManager-wait-online.service overridden to require a connection (no -s)"
 
 # ── 5b. Disable cloud-init in cmdline.txt ─────────────────────────────────────
 # cloud-init is installed by the base Pi OS image for Imager's

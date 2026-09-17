@@ -5,8 +5,9 @@
 #
 # This script is invoked by gateway-firstrun.service, a oneshot systemd
 # unit that is installed and enabled at image-build time. The unit is
-# ordered after network-online.target (Requires= + After=), so it only
-# fires once NetworkManager has completed DHCP on the wired interface.
+# ordered after network-online.target (Requires= + After=), but that target is
+# NOT a reliable "network is usable" signal (see wait_for_link below), so the
+# script additionally waits for a real carrier-up link before provisioning.
 #
 # One-shot guard: the unit has ConditionPathExists=!/etc/gateway-provisioned.
 # This script touches that sentinel file as its last provisioning action,
@@ -56,6 +57,28 @@ first_interactive_user() {
     done
 }
 
+# Wait for a genuinely usable link. network-online.target is NOT a reliable gate
+# here: NetworkManager-wait-online.service runs `nm-online -s`, which returns as
+# soon as NetworkManager logs "startup complete" — a state it reaches with every
+# device in a conclusive *deactivated* state when no cable is plugged in. The
+# target is therefore "reached" with no link at all (observed on real hardware).
+# Wait for an interface that has carrier AND a default route before doing
+# anything that needs the network. The timeout is generous on purpose: a fresh
+# device may legitimately be cabled up minutes after power-on.
+wait_for_link() {
+    local attempts="${1:-36}" delay="${2:-10}"
+    local attempt dev
+    for attempt in $(seq 1 "$attempts"); do
+        dev=$(ip -o route show default 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}')
+        if [ -n "$dev" ] && ip -o link show dev "$dev" 2>/dev/null | grep -q 'LOWER_UP'; then
+            return 0
+        fi
+        echo "[firstrun] no carrier-up interface with a default route (attempt ${attempt}/${attempts}) — waiting ${delay}s..." >&2
+        sleep "$delay"
+    done
+    return 1
+}
+
 # Wait until DNS resolution actually works. network-online.target guarantees a
 # route, not a functional resolver: on a fresh boot DHCP can complete while the
 # resolver is still settling, so name resolution fails for a short window right
@@ -76,6 +99,17 @@ wait_for_dns() {
 
 echo "=== BitTug First-Run ==="
 echo "Started: $(date)"
+
+# --- Wait for a real network link ---
+# network-online.target is reached with no cable attached (see wait_for_link),
+# so gate on actual carrier + default route before any network use.
+echo "[firstrun] $(date '+%H:%M:%S') Starting: network link wait"
+if ! wait_for_link 36 10; then
+    echo "[firstrun] ERROR: no carrier-up interface with a default route after 6 minutes." >&2
+    echo "[firstrun] Connect the network cable and reboot to retry." >&2
+    exit 1
+fi
+echo "[firstrun] $(date '+%H:%M:%S') Completed: network link wait"
 
 # --- Install git if needed ---
 echo "[firstrun] $(date '+%H:%M:%S') Starting: git install check"

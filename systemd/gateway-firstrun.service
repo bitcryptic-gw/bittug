@@ -14,7 +14,9 @@ After=time-sync.target
 [Service]
 Type=oneshot
 ExecStart=/boot/firmware/firstrun.sh
-TimeoutStartSec=600
+# Generous: firstrun deliberately waits for a real link (up to ~6 min) before
+# provisioning, so the unit budget must exceed that plus clone/bootstrap.
+TimeoutStartSec=1200
 # journal+console: on a failed fresh boot SSH may be closed and console input
 # dead, leaving the HDMI console as the only observable channel. Mirror the
 # provisioning output there so a failure is visible on screen.
