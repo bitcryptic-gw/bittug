@@ -199,6 +199,23 @@ echo "[build] lora_pkt_fwd installed to /usr/local/bin/lora_pkt_fwd"
 # SX1302 source tree no longer needed — will be cleaned up with WORKDIR
 rm -rf "$SX1302_SRC"
 
+# ── 4b. Ensure SSH-enable marker on the boot partition ────────────────────────
+# Raspberry Pi OS only enables sshd on first boot if an empty `ssh` file is
+# present on the boot (FAT) partition — sshswitch.service checks for it and does
+# nothing when it is absent. The image previously shipped without it, so a fresh
+# flash had no SSH until firstrun.sh reached its own `systemctl enable --now ssh`
+# (itself dependent on a working first boot), leaving a failed first boot
+# unreachable for diagnosis. Create it unconditionally at build time. On this
+# layout the boot partition is mounted at /boot/firmware on the running system,
+# so this is the same path firstrun.sh touches.
+SSH_MARKER="${WORKDIR}/mnt/boot/ssh"
+touch "$SSH_MARKER"
+if [ ! -f "$SSH_MARKER" ]; then
+    echo "[build] ERROR: failed to create SSH-enable marker at ${SSH_MARKER}" >&2
+    exit 1
+fi
+echo "[build] SSH-enable marker present on boot partition (${SSH_MARKER})"
+
 # ── 5. Install and enable gateway-firstrun.service ───────────────────────────
 echo ""
 echo "--- Installing gateway-firstrun.service ---"

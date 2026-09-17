@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-09-17 — Fix DNS-readiness race in firstrun.sh; ship SSH-enable marker in the image
+
+**Why:** The v2026.09.17 fresh-flash acceptance boot (post-55f9b32) failed, but the
+diagnostics added in 55f9b32 made the cause legible from the HDMI console alone (no
+SD-card recovery). `network-online.target` had been reached, yet
+`apt-get install git` died with `Temporary failure resolving 'deb.debian.org'` — the
+same race class as the clock and Docker-registry races: "network online" does not mean
+DNS is usable. Separately, the flashed boot partition had no `ssh` file, so SSH was
+unavailable for initial access; `sshswitch.service` behaved correctly (file absent →
+nothing to do). The build never created it — a gap, not a regression.
+
+**What changed:**
+- `boot/firstrun.sh`: added `wait_for_dns()` (6 attempts × 10s, via
+  `getent hosts deb.debian.org`) before the git install, and wrapped
+  `apt-get update` + `apt-get install git` in a 3×10s retry. The existing `ERR` trap
+  and exit handling are unchanged.
+- `boot/build-image.sh`: new step 4b creates an empty `ssh` marker at the boot
+  partition root (`${WORKDIR}/mnt/boot/ssh`, i.e. `/boot/firmware/ssh` at runtime),
+  unconditionally, with a build-time self-check that aborts the build if absent.
+
+**Verified:** The real `firstrun.sh` was run in a Debian trixie container with DNS
+blackholed (not the whole network):
+- DNS dead from boot, released at t=25s → 3 "DNS not ready" retries, then apt
+  succeeded and firstrun completed (exit 0, sentinel written).
+- DNS up for the probe, then blackholed during apt → apt attempt 1/3 failed, the retry
+  succeeded once DNS recovered, firstrun completed (exit 0).
+
+Issue 2: the literal 4b block extracted from `build-image.sh` was executed against a
+simulated mounted boot partition — it creates the empty `ssh` file and is
+unconditional. (A full loop-mounted image build cannot run on macOS; the build step
+was confirmed by direct execution.)
+
+**Follow-up:** Re-flash and re-run the offline-boot acceptance test; DNS retry and SSH
+availability to be confirmed on real hardware.
+
 ## 2026-09-17 — Relax firstrun/platform time-sync dependency; add boot diagnostics
 
 **Why:** The v2026.09.17 real-device acceptance boot (spare Pi 3B, ethernet

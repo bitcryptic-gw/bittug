@@ -56,6 +56,24 @@ first_interactive_user() {
     done
 }
 
+# Wait until DNS resolution actually works. network-online.target guarantees a
+# route, not a functional resolver: on a fresh boot DHCP can complete while the
+# resolver is still settling, so name resolution fails for a short window right
+# when this script runs. Retry with the same 10s cadence as the git-clone and
+# Docker-install retries.
+wait_for_dns() {
+    local host="$1" attempts="${2:-6}" delay="${3:-10}"
+    local attempt
+    for attempt in $(seq 1 "$attempts"); do
+        if getent hosts "$host" >/dev/null 2>&1; then
+            return 0
+        fi
+        echo "[firstrun] DNS not ready (attempt ${attempt}/${attempts}): cannot resolve ${host} — waiting ${delay}s..." >&2
+        sleep "$delay"
+    done
+    return 1
+}
+
 echo "=== BitTug First-Run ==="
 echo "Started: $(date)"
 
@@ -64,8 +82,32 @@ echo "[firstrun] $(date '+%H:%M:%S') Starting: git install check"
 if ! command -v git &>/dev/null; then
     echo "[firstrun] Installing git..."
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq
-    apt-get install -y -qq git
+
+    # network-online.target does not imply working DNS. Wait for the resolver
+    # before touching apt, which otherwise dies with
+    # "Temporary failure resolving 'deb.debian.org'".
+    if ! wait_for_dns deb.debian.org 6 10; then
+        echo "[firstrun] ERROR: DNS still not resolving deb.debian.org after 6 attempts." >&2
+        echo "[firstrun] Check the network/DNS configuration, then reboot to retry." >&2
+        exit 1
+    fi
+
+    # Even with DNS up, a transient resolver hiccup can hit mid-sequence, so
+    # retry the whole update+install pair rather than only probing up front.
+    APT_OK=false
+    for attempt in 1 2 3; do
+        if apt-get update -qq && apt-get install -y -qq git; then
+            APT_OK=true
+            break
+        fi
+        echo "[firstrun] apt-get attempt ${attempt}/3 failed — waiting and retrying..." >&2
+        sleep 10
+    done
+    if [ "$APT_OK" != true ]; then
+        echo "[firstrun] ERROR: apt-get install git failed after 3 attempts." >&2
+        exit 1
+    fi
+
     echo "[firstrun] git installed"
 fi
 echo "[firstrun] $(date '+%H:%M:%S') Completed: git install check"
