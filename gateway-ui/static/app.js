@@ -2266,6 +2266,130 @@ function renderDepin(d) {
         configEl.classList.remove('hidden');
       }
     }
+
+    if (project === 'anyone') renderAnyoneIdentity(s);
+  }
+}
+
+// Anyone relay identity: nickname (config source of truth) + fingerprint read
+// from the relay's data directory via gateway-ui's setuid wrapper. The block
+// is shown once the project is configured; the fingerprint degrades to a
+// neutral "not available yet" while the container is down or still starting.
+function renderAnyoneIdentity(s) {
+  const body = document.querySelector('.anyone-identity-body[data-project="anyone"]');
+  if (!body) return;
+  const d = s || {};
+  body.classList.toggle('hidden', !d.configured);
+  if (!d.configured) return;
+
+  const nickEl = document.getElementById('any-nickname-display');
+  if (nickEl) nickEl.textContent = d.anyone_nickname || '—';
+
+  const fpr = d.anyone_fingerprint || '';
+  const fprEl = document.getElementById('any-fingerprint');
+  const copyBtn = document.getElementById('btn-any-copy-fpr');
+  const noteEl = document.getElementById('any-fpr-note');
+  if (fpr) {
+    fprEl.textContent = groupFingerprint(fpr);
+    fprEl.dataset.fpr = fpr;
+    copyBtn.disabled = false;
+    if (noteEl) {
+      if (d.anyone_nickname_pending) {
+        noteEl.textContent = 'Nickname change is pending — it takes effect after the relay restarts.';
+        noteEl.classList.remove('hidden');
+      } else {
+        noteEl.classList.add('hidden');
+      }
+    }
+  } else {
+    fprEl.textContent = 'Not available yet';
+    fprEl.dataset.fpr = '';
+    copyBtn.disabled = true;
+    if (noteEl) noteEl.classList.add('hidden');
+  }
+
+  // Keep the rename input in sync with the configured nickname, but never
+  // clobber an in-progress edit (form open) on a 30s poll.
+  const form = document.getElementById('any-rename-form');
+  const input = document.getElementById('any-nickname-new');
+  if (form && form.classList.contains('hidden') && input) {
+    input.value = d.anyone_nickname || '';
+  }
+}
+
+// 40 hex -> 10 groups of 4 for readability; copy always uses the clean 40
+// (stored on dataset.fpr), so the display grouping never leaks into copies.
+function groupFingerprint(fpr) {
+  return (fpr.match(/.{1,4}/g) || []).join(' ');
+}
+
+function anyoneRenameToggle() {
+  const form = document.getElementById('any-rename-form');
+  const toggle = document.getElementById('btn-any-rename-toggle');
+  if (!form) return;
+  if (form.classList.contains('hidden')) {
+    form.classList.remove('hidden');
+    if (toggle) toggle.textContent = 'Cancel';
+    const input = document.getElementById('any-nickname-new');
+    if (input) { input.focus(); input.select(); }
+  } else {
+    anyoneRenameCancel();
+  }
+}
+
+function anyoneRenameCancel() {
+  const form = document.getElementById('any-rename-form');
+  const toggle = document.getElementById('btn-any-rename-toggle');
+  const input = document.getElementById('any-nickname-new');
+  if (form) form.classList.add('hidden');
+  if (toggle) toggle.textContent = 'Change';
+  if (input) input.value = '';
+}
+
+async function anyoneRenameSave() {
+  const input = document.getElementById('any-nickname-new');
+  const btn = document.getElementById('btn-any-rename-save');
+  const nick = ((input && input.value) || '').trim();
+  // UX-only mirror of the server-side rule; the server remains authoritative.
+  if (!/^[A-Za-z0-9]{1,19}$/.test(nick)) {
+    showResult('depin-result-any-rename', 'Nickname must be 1-19 letters/numbers only.', true);
+    return;
+  }
+  const current = (depinState.projects && depinState.projects.anyone
+    && depinState.projects.anyone.anyone_nickname) || '';
+  if (nick === current) {
+    showResult('depin-result-any-rename', 'That is already the current nickname.', true);
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  try {
+    // Reuse the existing idempotent configure path; omitting contact/myfamily
+    // makes the server preserve the configured values.
+    await api('/api/depin/anyone/configure', 'POST', { nickname: nick });
+    showResult('depin-result-any-rename', 'Nickname updated ✓ (relay restarting)', false);
+    anyoneRenameCancel();
+    setTimeout(loadDepin, 2000);
+    setTimeout(loadDepin, 8000);
+  } catch (e) {
+    if (e.message !== 'unauthorized') showResult('depin-result-any-rename', e.message, true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save nickname'; }
+  }
+}
+
+async function anyoneCopyFingerprint() {
+  const fprEl = document.getElementById('any-fingerprint');
+  const btn = document.getElementById('btn-any-copy-fpr');
+  const fpr = (fprEl && fprEl.dataset.fpr) || '';
+  if (!fpr) return;
+  try {
+    await navigator.clipboard.writeText(fpr);
+    if (btn) {
+      btn.textContent = 'Copied ✓';
+      setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+    }
+  } catch {
+    alert('Copy failed — select and copy manually.');
   }
 }
 
@@ -2754,6 +2878,20 @@ function wireEvents() {
     const restartBtn = e.target.closest('.depin-restart-btn');
     if (restartBtn && !restartBtn.disabled) depinRestart(restartBtn.dataset.project);
   });
+
+  // DePIN — Anyone relay identity: rename + fingerprint copy (static controls)
+  const anyRenameToggle = document.getElementById('btn-any-rename-toggle');
+  if (anyRenameToggle) anyRenameToggle.addEventListener('click', anyoneRenameToggle);
+  const anyRenameSave = document.getElementById('btn-any-rename-save');
+  if (anyRenameSave) anyRenameSave.addEventListener('click', anyoneRenameSave);
+  const anyRenameCancel = document.getElementById('any-rename-cancel');
+  if (anyRenameCancel) anyRenameCancel.addEventListener('click', e => { e.preventDefault(); anyoneRenameCancel(); });
+  const anyNicknameNew = document.getElementById('any-nickname-new');
+  if (anyNicknameNew) anyNicknameNew.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); anyoneRenameSave(); }
+  });
+  const anyCopyFpr = document.getElementById('btn-any-copy-fpr');
+  if (anyCopyFpr) anyCopyFpr.addEventListener('click', anyoneCopyFingerprint);
 
   // DePIN — check for updates now (tab-level trigger)
   if (document.getElementById('btn-depin-run-check')) {

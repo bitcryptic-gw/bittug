@@ -71,6 +71,7 @@ WRAPPER_BIN = "/usr/local/bin/wingbits-setup-wrapper"
 NTFY_PATH = Path("/etc/gateway-ui/ntfy.json")
 POWER_WRAPPER = "/usr/local/bin/system-power-wrapper"
 DEPIN_WRAPPER = "/usr/local/bin/depin-config-wrapper"
+DEPIN_ANYONE_FPR_WRAPPER = "/usr/local/bin/depin-anyone-fingerprint-wrapper"
 DEPIN_UNINSTALL = "/opt/gateway/scripts/depin-uninstall.sh"
 NTFY_URL_RE = re.compile(r"^https?://")
 NTFY_TOPIC_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
@@ -93,6 +94,11 @@ DEPIN_PROJECTS = ["honeygain", "urnetwork", "myst", "anyone", "mastchain"]
 DEPIN_PROJECT_RE = re.compile(r"^(honeygain|urnetwork|myst|anyone|mastchain)$")
 DEPIN_DEVICE_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-]{0,63}$")
 DEPIN_NICKNAME_RE = re.compile(r"^[a-zA-Z0-9]{1,19}$")
+# Tor-style relay fingerprint: exactly 40 hex chars (case-insensitive).
+DEPIN_FPR_RE = re.compile(r"^[0-9A-Fa-f]{40}$")
+# A single whitespace-delimited run of hex chars — used to reassemble a
+# fingerprint that Tor may have written space-grouped.
+DEPIN_HEX_TOKEN_RE = re.compile(r"^[0-9A-Fa-f]+$")
 DEPIN_CONFIG_REQUIRED = {"honeygain", "urnetwork", "anyone", "mastchain"}
 DEPIN_ENV_DIR = Path("/etc/gateway-ui/depin")
 DEPIN_HEALTH_STATE_DIR = Path("/var/lib/gateway-ui")
@@ -118,6 +124,15 @@ _depin_check_running = False
 _depin_restart_running = False
 
 DEPIN_LOG_LINES = 50
+
+# Anyone relay identity (fingerprint) is read via `docker exec`, which is far
+# heavier than the local file/systemctl reads the 30s status poll otherwise
+# does. Cache it: a successful read is stable for the life of the data
+# directory, so hold it longer; a failed read (container down / file not yet
+# written) is retried sooner so first-start settles promptly.
+_ANYONE_FPR_TTL_OK = 60
+_ANYONE_FPR_TTL_FAIL = 15
+_anyone_fpr_cache = {"ts": 0.0, "fingerprint": None, "file_nickname": None}
 
 DEPIN_HEALTH_PATTERNS = {
     "honeygain": {
@@ -2601,6 +2616,99 @@ def _depin_parse_logs(log_lines: list[str], project: str) -> tuple[str, str]:
     return label, joined
 
 
+def _anonrc_fields() -> dict:
+    """Read the gateway-generated Anyone config as the source of truth for
+    nickname/contact/family. anonrc is root:root 0644 (no secrets), so the
+    unprivileged gateway-ui process reads it directly. Returns {} on any
+    read failure; only the first occurrence of each key wins."""
+    fields: dict = {}
+    try:
+        text = DEPIN_ANONRC.read_text(errors="replace")
+    except OSError:
+        return fields
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or " " not in line:
+            continue
+        key, _, val = line.partition(" ")
+        if key in ("Nickname", "ContactInfo", "MyFamily") and key not in fields:
+            fields[key] = val.strip()
+    return fields
+
+
+def _parse_anyone_fingerprint_file(text: str) -> tuple[str | None, str | None]:
+    """Parse the relay's Tor-style `fingerprint` file. Observed format
+    (pi4-urquhart, 2026-09-29):
+        UrquhartPi4 AF10EC2B31F7CD8E139A175E020CCDCB98F6F130
+    i.e. optional nickname, whitespace, then a 40-hex fingerprint which may be
+    written space-grouped. Parse defensively: take the trailing run of
+    hex-only tokens as the fingerprint (so a hex-looking nickname is never
+    absorbed), everything before it as the nickname, and reject anything that
+    does not reduce to exactly 40 hex chars. Returns (nickname, fingerprint)."""
+    line = next((l.strip() for l in (text or "").splitlines() if l.strip()), "")
+    if not line:
+        return None, None
+    tokens = line.split()
+    # Consume trailing hex tokens until exactly 40 hex chars are collected.
+    # Stopping AT 40 (rather than taking every hex token) keeps a hex-only
+    # nickname — e.g. "ABCD" — from being absorbed into the fingerprint.
+    hex_tokens: list[str] = []
+    total = 0
+    for tok in reversed(tokens):
+        if not DEPIN_HEX_TOKEN_RE.fullmatch(tok) or total + len(tok) > 40:
+            break
+        hex_tokens.insert(0, tok)
+        total += len(tok)
+        if total == 40:
+            break
+    nickname = " ".join(tokens[:len(tokens) - len(hex_tokens)]) or None
+    fingerprint = "".join(hex_tokens)
+    if not DEPIN_FPR_RE.fullmatch(fingerprint):
+        return nickname, None
+    return nickname, fingerprint.upper()
+
+
+def _anyone_fingerprint() -> dict:
+    """Read the relay fingerprint via the setuid wrapper (`docker exec`).
+    Cached server-side (60s success / 15s failure) so the 30s status poll does
+    not shell out to docker on every tick. Never raises; any problem — wrapper
+    not installed, container down, file not yet written, malformed content —
+    yields fingerprint=None so the UI renders a neutral state."""
+    now = time.time()
+    cache = _anyone_fpr_cache
+    ttl = _ANYONE_FPR_TTL_OK if cache.get("fingerprint") else _ANYONE_FPR_TTL_FAIL
+    if now - float(cache.get("ts", 0.0)) < ttl:
+        return cache
+    fingerprint = None
+    file_nickname = None
+    if Path(DEPIN_ANYONE_FPR_WRAPPER).exists():
+        rc, out, _err = _run([DEPIN_ANYONE_FPR_WRAPPER], timeout=10)
+        if rc == 0:
+            file_nickname, fingerprint = _parse_anyone_fingerprint_file(out)
+    cache.update({"ts": now, "fingerprint": fingerprint, "file_nickname": file_nickname})
+    return cache
+
+
+def _anyone_identity() -> dict:
+    """Nickname/contact from config (source of truth) plus the relay
+    fingerprint. `nickname_pending` is true in the window between a config
+    change and the next relay restart, when the fingerprint file still carries
+    the previous nickname — config is the intended value."""
+    cfg = _anonrc_fields()
+    nickname = cfg.get("Nickname") or ""
+    fpr = _anyone_fingerprint()
+    file_nickname = fpr.get("file_nickname")
+    return {
+        "nickname": nickname or None,
+        "contact": cfg.get("ContactInfo") or None,
+        "myfamily": cfg.get("MyFamily") or None,
+        "fingerprint": fpr.get("fingerprint"),
+        "fingerprint_available": bool(fpr.get("fingerprint")),
+        "fingerprint_file_nickname": file_nickname,
+        "nickname_pending": bool(file_nickname and nickname and file_nickname != nickname),
+    }
+
+
 def _depin_project_status(project: str) -> dict:
     unit = _depin_service_unit(project)
     installed = _service_installed(unit)
@@ -2627,6 +2735,8 @@ def _depin_project_status(project: str) -> dict:
     extra = {}
     if project == "mastchain":
         extra = _mastchain_hardware_status()
+    elif project == "anyone":
+        extra = _anyone_identity()
     return {
         "project": project,
         "installed": installed,
@@ -2943,9 +3053,20 @@ async def api_depin_configure(_: Auth, project: str, request: Request):
         rc, out, err = await _run_async([DEPIN_WRAPPER, "mastchain", email, token], timeout=15)
 
     elif project == "anyone":
+        existing = _anonrc_fields()
         nickname = str(body.get("nickname", "")).strip()
-        contact = str(body.get("contact", "")).strip()
-        myfamily = str(body.get("myfamily", "")).strip() or None
+        # Contact is only re-collected by the first-time form; a nickname-only
+        # rename (the card's edit control) omits it, so preserve what is
+        # configured rather than blanking it.
+        contact = str(body.get("contact", "")).strip() or existing.get("ContactInfo", "")
+        # myfamily: an explicit key (even empty) replaces the configured family,
+        # so the first-time form can clear it; an absent key preserves it, so a
+        # nickname-only rename never drops an existing MyFamily.
+        if "myfamily" in body:
+            myfamily = str(body.get("myfamily", "")).strip()
+        else:
+            myfamily = existing.get("MyFamily", "")
+        myfamily = myfamily or None
 
         if not nickname:
             raise HTTPException(status_code=400, detail="nickname is required")
@@ -2970,6 +3091,17 @@ async def api_depin_configure(_: Auth, project: str, request: Request):
     if rc != 0:
         detail = (err or out).strip() or "config write failed"
         raise HTTPException(status_code=500, detail=detail)
+
+    if project == "anyone":
+        # A nickname change is applied by regenerating anonrc (above) and then
+        # restarting the relay — restart is preferred over SIGHUP for
+        # simplicity. Restart only when the unit is already active: on a
+        # first-time configure it is not yet enabled, and starting it here
+        # would pre-empt the user's explicit enable.
+        _anyone_fpr_cache["ts"] = 0.0
+        unit = _depin_service_unit("anyone")
+        if _service_info(unit)["state"] == "active":
+            await _run_async(["sudo", _SYSTEMCTL, "restart", unit], timeout=30)
 
     return {"ok": True, "project": project, "configured": _depin_is_configured(project)}
 
@@ -3025,6 +3157,10 @@ def api_depin_enable(_: Auth, project: str):
     # Initial container start: capture the running version now (no-op for
     # Honeygain). Aligned with the auto-update capture in depin-update-check.sh.
     _depin_capture_version_on_restart(project)
+    if project == "anyone":
+        # First start may have just generated the identity — drop any cached
+        # "unavailable" read so the fingerprint appears on the next poll.
+        _anyone_fpr_cache["ts"] = 0.0
     return {"ok": True, "project": project, "enabled": True}
 
 
@@ -3060,6 +3196,10 @@ async def api_depin_uninstall(_: Auth, project: str, request: Request):
     rc, out, err = _run(["sudo", DEPIN_UNINSTALL, project], timeout=60)
     if rc != 0:
         raise HTTPException(status_code=500, detail=err or out.strip() or "uninstall failed")
+    if project == "anyone":
+        # Full Uninstall wipes the data directory, so the next identity will be
+        # different — never serve a stale cached fingerprint.
+        _anyone_fpr_cache["ts"] = 0.0
     return {"ok": True, "project": project, "uninstalled": True}
 
 

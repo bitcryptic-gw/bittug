@@ -1,5 +1,52 @@
 # Changelog
 
+## 2026-09-29 — Anyone relay: show fingerprint + nickname, add safe nickname rename
+
+**Why:** The Anyone card only showed a running/healthy badge and generic log
+tail — there was no way to see the relay's actual identity (fingerprint) or its
+configured nickname, and no way to change the nickname after first enable
+without editing `anonrc` by hand on the box.
+
+**What changed:**
+- New setuid wrapper `scripts/depin-anyone-fingerprint-wrapper.c` — runs
+  `docker exec anyone cat /var/lib/anon/fingerprint` with fixed argv, no
+  arguments accepted, no shell. Same setuid/allowlist pattern as
+  `depin-logs-wrapper`; no new sudoers entries (nothing to extend in
+  `sync-provisioning.sh`). Recompiled by `install-wrappers.sh`, which the OTA
+  wrapper already runs every update.
+- `gateway-ui/main.py` — `_anonrc_fields()` reads config (source of truth,
+  root:root 0644), `_parse_anyone_fingerprint_file()` parses the
+  `<nickname> <40-hex>` file defensively, and `_anyone_fingerprint()` reads via
+  the wrapper with a 60s/15s server-side cache folded into the existing
+  `/api/depin/status` payload (no new polling loop). Anyone status now carries
+  nickname/contact/myfamily/fingerprint/`nickname_pending`.
+- `POST /api/depin/anyone/configure` (already idempotent) now **preserves
+  contact and MyFamily when omitted**, and **restarts `depin-anyone` when it is
+  active** so a rename takes effect. Restart is a no-op on first-time configure
+  (unit not yet enabled). `anonrc` is still written via the wrapper's
+  temp-file + rename, so validation/write failures leave it untouched.
+- `gateway-ui/static/{index.html,app.js,style.css}` — the Anyone card shows the
+  nickname and the 40-hex fingerprint (monospace, space-grouped for
+  readability, copy button yields the clean 40), a "not available yet" neutral
+  state when the relay is stopped/uninitialised, and a Change/Cancel inline
+  rename form noting the new name can take a few hours to appear on dashboards
+  and that the fingerprint/reputation are unaffected. Full Uninstall is
+  unchanged and stays visually distinct.
+
+**Research (Anyone Protocol docs):** registration/rewards are keyed on the
+relay's identity fingerprint + wallet address, never the nickname. The Anyone
+native manual: *"Relays can always be uniquely identified by their identity
+fingerprints."* Wallet association is written into `ContactInfo @anon: 0x…`;
+the dashboard claims/renounces relays by fingerprint. (Sources:
+docs.anyone.io/sdk/native-sdk/manual.md, /dashboard/register.md,
+/dashboard/use.md, /dashboard/status.md.)
+
+**Verified on pi4-urquhart** (OTA): fingerprint file format confirmed
+(`UrquhartPi4 AF10EC2B31F7CD8E139A175E020CCDCB98F6F130`); card shows that
+fingerprint + nickname; neutral state with the relay stopped; rename preserves
+the fingerprint across restart; invalid/oversized inputs rejected with `anonrc`
+untouched.
+
 ## 2026-09-17 — network-online.target false positive with no cable; gate firstrun on a real link
 
 **Why:** The v2026.09.17.x acceptance boot (post-586cb74) showed

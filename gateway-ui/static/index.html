@@ -307,6 +307,29 @@
               <span class="result-msg" id="depin-result-anyone"></span>
             </div>
           </div>
+          <div class="card-body anyone-identity-body hidden" data-project="anyone">
+            <div class="anyone-id-row">
+              <span class="field-label">Nickname</span>
+              <span class="anyone-id-value" id="any-nickname-display">—</span>
+              <button class="btn btn-sm" id="btn-any-rename-toggle" type="button">Change</button>
+            </div>
+            <div class="anyone-rename-form hidden mt" id="any-rename-form">
+              <input type="text" id="any-nickname-new" class="wingbits-input" maxlength="19"
+                     placeholder="New nickname (letters/numbers, max 19)" autocomplete="off" spellcheck="false">
+              <div class="action-row mt-sm">
+                <button class="btn btn-primary btn-sm" id="btn-any-rename-save" type="button">Save nickname</button>
+                <a href="#" class="confirm-cancel" id="any-rename-cancel">&nbsp;Cancel</a>
+                <span class="result-msg" id="depin-result-any-rename"></span>
+              </div>
+              <div class="hint mt-sm">Changing the nickname does not affect the relay fingerprint or its reputation. The new name can take a few hours to appear on network dashboards.</div>
+            </div>
+            <div class="anyone-id-row mt">
+              <span class="field-label">Fingerprint</span>
+              <code class="anyone-fpr" id="any-fingerprint">—</code>
+              <button class="btn btn-sm" id="btn-any-copy-fpr" type="button" disabled>Copy</button>
+            </div>
+            <div class="hint hidden" id="any-fpr-note"></div>
+          </div>
           <div class="depin-uninstall-section" id="depin-uninstall-anyone">
             <button class="btn btn-danger btn-sm depin-uninstall-btn" data-project="anyone">Full Uninstall</button>
             <span class="result-msg" id="depin-uninstall-result-anyone"></span>
