@@ -2271,10 +2271,16 @@ function renderDepin(d) {
   }
 }
 
-// Anyone relay identity: nickname (config source of truth) + fingerprint read
-// from the relay's data directory via gateway-ui's setuid wrapper. The block
-// is shown once the project is configured; the fingerprint degrades to a
-// neutral "not available yet" while the container is down or still starting.
+// Anyone reward-claim wallet token. Per docs.anyone.io/dashboard/register.md
+// the wallet goes in ContactInfo prefixed with "@anon:" (e.g.
+// "@anon: 0x" + 40 hex). Advisory only — never blocks saving.
+const ANYONE_WALLET_RE = /@anon:\s*0x[0-9a-fA-F]{40}\b/;
+
+// Anyone relay identity: nickname + contact (config source of truth) plus the
+// fingerprint read from the relay's data directory via an exact-command sudo
+// grant. The block is shown once the project is configured; the fingerprint
+// degrades to a neutral "not available yet" while the container is down or
+// still starting.
 function renderAnyoneIdentity(s) {
   const body = document.querySelector('.anyone-identity-body[data-project="anyone"]');
   if (!body) return;
@@ -2308,6 +2314,20 @@ function renderAnyoneIdentity(s) {
     if (noteEl) noteEl.classList.add('hidden');
   }
 
+  // Reward wallet parsed from ContactInfo, when present (same source of truth
+  // as the nickname). Hidden when the contact has no well-formed wallet token.
+  const walletRow = document.getElementById('any-wallet-row');
+  const walletEl = document.getElementById('any-wallet');
+  if (walletRow && walletEl) {
+    const wm = (d.anyone_contact || '').match(ANYONE_WALLET_RE);
+    if (wm) {
+      walletEl.textContent = wm[0].replace(/^@anon:\s*/, '');
+      walletRow.classList.remove('hidden');
+    } else {
+      walletRow.classList.add('hidden');
+    }
+  }
+
   // Keep the rename input in sync with the configured nickname, but never
   // clobber an in-progress edit (form open) on a 30s poll.
   const form = document.getElementById('any-rename-form');
@@ -2315,6 +2335,23 @@ function renderAnyoneIdentity(s) {
   if (form && form.classList.contains('hidden') && input) {
     input.value = d.anyone_nickname || '';
   }
+}
+
+// Soft, non-blocking advisory: does the Anyone contact field contain a
+// well-formed wallet token? Informational only — saving is never prevented
+// (a user may legitimately not want rewards, or not have a wallet yet).
+function anyContactWalletCheck() {
+  const input = document.getElementById('any-contact');
+  const warn = document.getElementById('any-contact-wallet-warn');
+  if (!input || !warn) return;
+  const val = (input.value || '').trim();
+  if (!val || ANYONE_WALLET_RE.test(val)) {
+    warn.textContent = '';
+    warn.classList.add('hidden');
+    return;
+  }
+  warn.textContent = 'Rewards can\u2019t be claimed for this relay until the contact field contains your wallet in the @anon: 0x\u2026 format. You can still save without one.';
+  warn.classList.remove('hidden');
 }
 
 // 40 hex -> 10 groups of 4 for readability; copy always uses the clean 40
@@ -2892,6 +2929,11 @@ function wireEvents() {
   });
   const anyCopyFpr = document.getElementById('btn-any-copy-fpr');
   if (anyCopyFpr) anyCopyFpr.addEventListener('click', anyoneCopyFingerprint);
+  const anyContact = document.getElementById('any-contact');
+  if (anyContact) {
+    anyContact.addEventListener('input', anyContactWalletCheck);
+    anyContactWalletCheck();
+  }
 
   // DePIN — check for updates now (tab-level trigger)
   if (document.getElementById('btn-depin-run-check')) {

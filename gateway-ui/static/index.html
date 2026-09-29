@@ -295,7 +295,9 @@
             </div>
             <div class="field-group mt">
               <label class="field-label" for="any-contact">Contact info</label>
-              <input type="text" id="any-contact" class="wingbits-input" placeholder="e.g. you@example.com or @handle" autocomplete="off" spellcheck="false">
+              <input type="text" id="any-contact" class="wingbits-input" placeholder="e.g. you@example.com — add a wallet for rewards" autocomplete="off" spellcheck="false">
+              <span class="hint">To be eligible to claim rewards for this relay, include your EVM wallet address in this field in the format <code>@anon: 0x…</code> — for example <code>@anon: 0x0123456789abcdef0123456789abcdef01234567</code>. Contact info is published in the relay's public descriptor and indexed by search engines, so do not put anything private here.</span>
+              <span class="hint warn-text hidden" id="any-contact-wallet-warn" role="status"></span>
             </div>
             <div class="field-group mt">
               <label class="field-label" for="any-myfamily">MyFamily <span class="dim">(optional)</span></label>
@@ -327,6 +329,10 @@
               <span class="field-label">Fingerprint</span>
               <code class="anyone-fpr" id="any-fingerprint">—</code>
               <button class="btn btn-sm" id="btn-any-copy-fpr" type="button" disabled>Copy</button>
+            </div>
+            <div class="anyone-id-row mt hidden" id="any-wallet-row">
+              <span class="field-label">Rewards wallet</span>
+              <code class="anyone-fpr" id="any-wallet">—</code>
             </div>
             <div class="hint hidden" id="any-fpr-note"></div>
           </div>

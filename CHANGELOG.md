@@ -1,5 +1,50 @@
 # Changelog
 
+## 2026-09-30 — Anyone fingerprint read: sudoers instead of setuid wrapper; wallet ContactInfo hint
+
+**Why (wrapper → sudoers):** The 2026-09-29 change read the Anyone fingerprint
+via a new setuid-root `depin-anyone-fingerprint-wrapper` binary. Gary's
+position: a setuid-root binary that execs docker is a larger attack surface
+than an exact-match sudoers line, so the burden of proof was on the wrapper.
+Investigation found **no technical blocker to sudoers**: `gateway-ui.service`
+does **not** set `NoNewPrivileges` (it sets only `PrivateTmp=yes`), and the
+service already runs many `sudo` commands successfully (systemctl enable/start/
+stop/restart, docker pull, depin-uninstall) with the existing NOPASSWD grants.
+The original `depin-logs-wrapper` setuid rationale was likewise convenience
+("no provisioning script changes needed"), not a documented sudo limitation.
+
+**What changed:**
+- **Replaced the wrapper with an exact-command sudoers grant.**
+  `scripts/depin-anyone-fingerprint-wrapper.c` is deleted; `install-wrappers.sh`
+  no longer builds it. `sync-provisioning.sh` writes
+  `gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker exec anyone cat /var/lib/anon/fingerprint`
+  (no wildcards) into `/etc/sudoers.d/10-gateway-ui` using the existing atomic
+  temp-file + `visudo -c -f` + rename path, and **removes the orphaned setuid
+  binary** `/usr/local/bin/depin-anyone-fingerprint-wrapper` idempotently on
+  every run, so devices from the earlier build are cleaned up on OTA.
+- `gateway-ui/main.py`: `_anyone_fingerprint()` now runs the fixed argv
+  `sudo -n /usr/bin/docker exec anyone cat /var/lib/anon/fingerprint` (no shell).
+  Behavior, caching (60s/15s) and the neutral "not available" state are
+  unchanged; the fingerprint equals the raw `docker exec` output.
+- **Anyone contact field: reward-wallet hint.** Per
+  docs.anyone.io/dashboard/register.md, reward-claim eligibility requires the
+  EVM wallet in `ContactInfo` as `@anon: 0x` + 40 hex. The form now carries a
+  helper note with a fake example, states that ContactInfo is published in the
+  relay's public descriptor (per the anon/tor manual: descriptors are archived,
+  published and indexed), and shows a **soft, non-blocking** warning when the
+  value lacks a well-formed wallet token. The card also displays the wallet
+  parsed from the current contact, when present.
+- Server-side hardening: contact is now explicitly rejected with **400** if it
+  contains control characters (tab/CR/LF/other C0, DEL) — previously a tab
+  reached the C writer and surfaced as a 500. `@` and `:` remain allowed.
+
+**Reported, not changed:** the same setuid-vs-sudoers concern applies to
+`depin-logs-wrapper` (it execs `docker logs <project>` over a 5-name allowlist;
+sudoers would need five exact lines since wildcards are disallowed). Left as-is
+for Gary to decide. Also: the Anyone contact field is **not editable after
+first enable** (the config form hides once configured), so a user who enabled
+without a wallet has no UI path to add one — flagged, not built.
+
 ## 2026-09-29 — Anyone relay: show fingerprint + nickname, add safe nickname rename
 
 **Why:** The Anyone card only showed a running/healthy badge and generic log

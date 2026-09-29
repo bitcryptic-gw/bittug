@@ -82,6 +82,11 @@ gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker pull mysteriumnetwork/myst\:late
 gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker pull ghcr.io/anyone-protocol/ator-protocol\:latest
 gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker pull ghcr.io/c-man-the-man/mastchain-ais\:latest
 gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker run --rm -v /var/lib/gateway-ui/urnetwork\:/root/.urnetwork bringyour/community-provider\:g4-latest auth * -f
+# Anyone relay fingerprint read (DePIN UI). Exact command + arguments, no
+# wildcard: sudo refuses any other docker subcommand or path. The `:`
+# on the docker pull grants above is escaped; this path has no `:`, so the
+# only metacharacter is the fixed `/var/lib/anon/fingerprint`.
+gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker exec anyone cat /var/lib/anon/fingerprint
 SUDOERS
 chmod 0440 "$SUDOERS_TMP"
 if visudo -c -f "$SUDOERS_TMP"; then
@@ -90,6 +95,19 @@ if visudo -c -f "$SUDOERS_TMP"; then
 else
     log "WARNING: sudoers validation failed — preserving previous file untouched"
     rm -f "$SUDOERS_TMP"
+fi
+
+# --- Orphaned Anyone fingerprint setuid wrapper cleanup (2026-09-30) ---
+# The Anyone fingerprint read moved from a setuid wrapper to the exact-command
+# sudoers grant above. Remove the old binary so no setuid-root executable is
+# left behind on devices provisioned by the earlier build. Idempotent.
+ORPHAN="/usr/local/bin/depin-anyone-fingerprint-wrapper"
+if [ -e "$ORPHAN" ]; then
+    rm -f "$ORPHAN" && \
+        log "Removed orphaned setuid wrapper ${ORPHAN}" || \
+        log "WARNING: Failed to remove orphaned wrapper ${ORPHAN}"
+else
+    log "No orphaned Anyone fingerprint wrapper present"
 fi
 
 # --- gateway-rs settings.toml ---

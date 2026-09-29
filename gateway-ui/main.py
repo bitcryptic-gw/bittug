@@ -71,7 +71,15 @@ WRAPPER_BIN = "/usr/local/bin/wingbits-setup-wrapper"
 NTFY_PATH = Path("/etc/gateway-ui/ntfy.json")
 POWER_WRAPPER = "/usr/local/bin/system-power-wrapper"
 DEPIN_WRAPPER = "/usr/local/bin/depin-config-wrapper"
-DEPIN_ANYONE_FPR_WRAPPER = "/usr/local/bin/depin-anyone-fingerprint-wrapper"
+# Read the Anyone relay's Tor-style fingerprint. This is an exact-command
+# sudoers grant (added idempotently by sync-provisioning.sh) rather than a
+# setuid wrapper: fixed argv, no shell, and sudo refuses any other docker
+# subcommand/path for gateway-ui. `-n` guarantees no password prompt under the
+# service (there is no TTY).
+DEPIN_ANYONE_FPR_CMD = [
+    "sudo", "-n", "/usr/bin/docker", "exec", "anyone",
+    "cat", "/var/lib/anon/fingerprint",
+]
 DEPIN_UNINSTALL = "/opt/gateway/scripts/depin-uninstall.sh"
 NTFY_URL_RE = re.compile(r"^https?://")
 NTFY_TOPIC_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
@@ -2669,11 +2677,12 @@ def _parse_anyone_fingerprint_file(text: str) -> tuple[str | None, str | None]:
 
 
 def _anyone_fingerprint() -> dict:
-    """Read the relay fingerprint via the setuid wrapper (`docker exec`).
-    Cached server-side (60s success / 15s failure) so the 30s status poll does
-    not shell out to docker on every tick. Never raises; any problem — wrapper
-    not installed, container down, file not yet written, malformed content —
-    yields fingerprint=None so the UI renders a neutral state."""
+    """Read the relay fingerprint via `sudo -n docker exec` (exact-command
+    sudoers grant; fixed argv, no shell). Cached server-side (60s success / 15s
+    failure) so the 30s status poll does not shell out to docker on every tick.
+    Never raises; any problem — sudoers rule absent, container down, file not
+    yet written, malformed content — yields fingerprint=None so the UI renders
+    a neutral state."""
     now = time.time()
     cache = _anyone_fpr_cache
     ttl = _ANYONE_FPR_TTL_OK if cache.get("fingerprint") else _ANYONE_FPR_TTL_FAIL
@@ -2681,10 +2690,9 @@ def _anyone_fingerprint() -> dict:
         return cache
     fingerprint = None
     file_nickname = None
-    if Path(DEPIN_ANYONE_FPR_WRAPPER).exists():
-        rc, out, _err = _run([DEPIN_ANYONE_FPR_WRAPPER], timeout=10)
-        if rc == 0:
-            file_nickname, fingerprint = _parse_anyone_fingerprint_file(out)
+    rc, out, _err = _run(DEPIN_ANYONE_FPR_CMD, timeout=10)
+    if rc == 0:
+        file_nickname, fingerprint = _parse_anyone_fingerprint_file(out)
     cache.update({"ts": now, "fingerprint": fingerprint, "file_nickname": file_nickname})
     return cache
 
@@ -3076,6 +3084,12 @@ async def api_depin_configure(_: Auth, project: str, request: Request):
             raise HTTPException(status_code=400, detail="nickname too long (max 19)")
         if len(contact) > 255:
             raise HTTPException(status_code=400, detail="contact too long")
+        # anonrc is line-oriented: reject control characters (incl. tab/CR/LF)
+        # outright rather than relying on the C wrapper to catch them, so the
+        # response is a clean 400 and the input can never inject a new line.
+        # `@` and `:` (needed for the optional `@anon: 0x…` wallet token) pass.
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7f for ch in contact):
+            raise HTTPException(status_code=400, detail="contact contains control characters")
         if not DEPIN_NICKNAME_RE.fullmatch(nickname):
             raise HTTPException(status_code=400, detail="nickname must be alphanumeric only (1-19 chars)")
         if SHELL_META_RE.search(nickname) or SHELL_META_RE.search(contact):
