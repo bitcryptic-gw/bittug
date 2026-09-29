@@ -2699,13 +2699,13 @@ def _anyone_identity() -> dict:
     fpr = _anyone_fingerprint()
     file_nickname = fpr.get("file_nickname")
     return {
-        "nickname": nickname or None,
-        "contact": cfg.get("ContactInfo") or None,
-        "myfamily": cfg.get("MyFamily") or None,
-        "fingerprint": fpr.get("fingerprint"),
-        "fingerprint_available": bool(fpr.get("fingerprint")),
-        "fingerprint_file_nickname": file_nickname,
-        "nickname_pending": bool(file_nickname and nickname and file_nickname != nickname),
+        "anyone_nickname": nickname or None,
+        "anyone_contact": cfg.get("ContactInfo") or None,
+        "anyone_myfamily": cfg.get("MyFamily") or None,
+        "anyone_fingerprint": fpr.get("fingerprint"),
+        "anyone_fingerprint_available": bool(fpr.get("fingerprint")),
+        "anyone_fingerprint_file_nickname": file_nickname,
+        "anyone_nickname_pending": bool(file_nickname and nickname and file_nickname != nickname),
     }
 
 
