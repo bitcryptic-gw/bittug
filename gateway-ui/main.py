@@ -133,14 +133,23 @@ _depin_restart_running = False
 
 DEPIN_LOG_LINES = 50
 
-# Anyone relay identity (fingerprint) is read via `docker exec`, which is far
-# heavier than the local file/systemctl reads the 30s status poll otherwise
-# does. Cache it: a successful read is stable for the life of the data
-# directory, so hold it longer; a failed read (container down / file not yet
-# written) is retried sooner so first-start settles promptly.
-_ANYONE_FPR_TTL_OK = 60
-_ANYONE_FPR_TTL_FAIL = 15
-_anyone_fpr_cache = {"ts": 0.0, "fingerprint": None, "file_nickname": None}
+# Anyone relay identity (fingerprint) is read via `sudo -n docker exec`, which
+# is far heavier than the local file/systemctl reads the 30s status poll
+# otherwise does, and writes a sudo-log entry each time. The fingerprint is
+# stable for the life of the data directory, so cache a *successful* read until
+# the relay actually (re)starts — keyed on the systemd InvocationID, which
+# changes on every start and needs no privilege to read. Target: ~one sudo
+# entry per relay start, not one per minute.
+#
+# A failed read (container down / file not yet written) is retried on the short
+# TTL so first-start settles promptly. The ceiling is a safety net for a cached
+# positive if the marker somehow never changes (e.g. systemctl show unavailable)
+# — if the marker can't be read we fall back to the short TTL instead.
+_ANYONE_FPR_TTL_OK = 60          # fallback TTL when the restart marker is unknown
+_ANYONE_FPR_TTL_FAIL = 15        # negative-result TTL (never cached long)
+_ANYONE_FPR_CEILING = 24 * 3600  # absolute cap on a marker-matched cached positive
+_ANYONE_UNIT = "depin-anyone.service"
+_anyone_fpr_cache = {"ts": 0.0, "fingerprint": None, "file_nickname": None, "marker": None}
 
 DEPIN_HEALTH_PATTERNS = {
     "honeygain": {
@@ -2676,24 +2685,65 @@ def _parse_anyone_fingerprint_file(text: str) -> tuple[str | None, str | None]:
     return nickname, fingerprint.upper()
 
 
+def _anyone_unit_marker() -> str | None:
+    """Cheap unprivileged restart marker for depin-anyone: the systemd
+    InvocationID, which is a fresh UUID on every unit start and stable while it
+    runs. `systemctl show` needs no privilege (so no sudoers line, no docker
+    access). Returns None if it can't be read, so the fingerprint cache falls
+    back to its short TTL rather than caching indefinitely."""
+    rc, out, _err = _run(
+        [_SYSTEMCTL, "show", _ANYONE_UNIT, "-p", "InvocationID", "--value"],
+        timeout=5,
+    )
+    if rc == 0:
+        val = out.strip()
+        if val:
+            return val
+    return None
+
+
+def _invalidate_anyone_fingerprint_cache() -> None:
+    """Drop the cached fingerprint entirely. Called after any operation that can
+    change the relay's identity or config (configure, enable, uninstall) so the
+    next poll re-reads rather than serving a stale value."""
+    _anyone_fpr_cache.update(
+        {"ts": 0.0, "fingerprint": None, "file_nickname": None, "marker": None}
+    )
+
+
 def _anyone_fingerprint() -> dict:
     """Read the relay fingerprint via `sudo -n docker exec` (exact-command
-    sudoers grant; fixed argv, no shell). Cached server-side (60s success / 15s
-    failure) so the 30s status poll does not shell out to docker on every tick.
-    Never raises; any problem — sudoers rule absent, container down, file not
-    yet written, malformed content — yields fingerprint=None so the UI renders
-    a neutral state."""
+    sudoers grant; fixed argv, no shell).
+
+    Caching: a successful read is held until the relay's systemd InvocationID
+    changes (i.e. until the next start), with a 24h ceiling as a safety net; a
+    failed read is retried on the short negative TTL so first-start settles
+    promptly. If the marker is unavailable the short TTL is used instead of an
+    indefinite cache. Never raises; any problem — sudoers rule absent, container
+    down, file not yet written, malformed content — yields fingerprint=None so
+    the UI renders a neutral state."""
     now = time.time()
     cache = _anyone_fpr_cache
-    ttl = _ANYONE_FPR_TTL_OK if cache.get("fingerprint") else _ANYONE_FPR_TTL_FAIL
-    if now - float(cache.get("ts", 0.0)) < ttl:
+    age = now - float(cache.get("ts", 0.0))
+    marker = _anyone_unit_marker()
+    if cache.get("fingerprint") is not None:
+        marker_matches = marker is not None and cache.get("marker") == marker
+        if (marker_matches and age < _ANYONE_FPR_CEILING) or \
+           (marker is None and age < _ANYONE_FPR_TTL_OK):
+            return cache
+    elif age < _ANYONE_FPR_TTL_FAIL:
         return cache
     fingerprint = None
     file_nickname = None
     rc, out, _err = _run(DEPIN_ANYONE_FPR_CMD, timeout=10)
     if rc == 0:
         file_nickname, fingerprint = _parse_anyone_fingerprint_file(out)
-    cache.update({"ts": now, "fingerprint": fingerprint, "file_nickname": file_nickname})
+    cache.update({
+        "ts": now,
+        "fingerprint": fingerprint,
+        "file_nickname": file_nickname,
+        "marker": marker,
+    })
     return cache
 
 
@@ -3117,7 +3167,7 @@ async def api_depin_configure(_: Auth, project: str, request: Request):
             await _run_async(["sudo", _SYSTEMCTL, "restart", unit], timeout=30)
         # Invalidate AFTER the restart: a status poll landing during the
         # restart await could otherwise re-cache the pre-restart read.
-        _anyone_fpr_cache["ts"] = 0.0
+        _invalidate_anyone_fingerprint_cache()
 
     return {"ok": True, "project": project, "configured": _depin_is_configured(project)}
 
@@ -3176,7 +3226,7 @@ def api_depin_enable(_: Auth, project: str):
     if project == "anyone":
         # First start may have just generated the identity — drop any cached
         # "unavailable" read so the fingerprint appears on the next poll.
-        _anyone_fpr_cache["ts"] = 0.0
+        _invalidate_anyone_fingerprint_cache()
     return {"ok": True, "project": project, "enabled": True}
 
 
@@ -3215,7 +3265,7 @@ async def api_depin_uninstall(_: Auth, project: str, request: Request):
     if project == "anyone":
         # Full Uninstall wipes the data directory, so the next identity will be
         # different — never serve a stale cached fingerprint.
-        _anyone_fpr_cache["ts"] = 0.0
+        _invalidate_anyone_fingerprint_cache()
     return {"ok": True, "project": project, "uninstalled": True}
 
 

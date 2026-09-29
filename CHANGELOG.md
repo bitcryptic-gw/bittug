@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-09-30 — Anyone: post-enable nickname+contact edit; wallet-format evidence; restart-keyed fingerprint cache
+
+**Item 1 — edit ContactInfo after first enable.** The configured Anyone card's
+Change control now opens a **single form covering nickname and contact
+together**, so editing both is one `POST /api/depin/anyone/configure` call and
+therefore **one** relay restart. The card shows the current contact, and the
+form reuses the *same* contact field (helper text + advisory warning) as the
+first-enable form via one shared JS template (`anyoneContactFieldHTML`), so the
+two can't drift. MyFamily is omitted from the payload and preserved server-side.
+Server validation is unchanged (control chars/newlines/tabs/length still 400,
+anonrc untouched on failure — temp-file+rename). The form is disabled while a
+save is in flight and a `depinState.anyoneSaving` guard drops rapid repeat
+submits, so no overlapping restarts. Note in the form: changes can take a few
+hours to appear on dashboards; fingerprint/reputation unaffected.
+
+**Item 2 — wallet advisory: kept the looser form, with source evidence.** The
+live Anyone registry parser tolerates no-space / extra-space / tab forms, so
+tightening to exactly one space would falsely warn on registerable input. The
+parser is `anyone-protocol/operator-registry-controller`
+(`src/validation/validation.service.ts`, `extractAtorKey`, pinned commit
+`0bbc789`): it finds `@anon:` case-insensitively, then the next `0x`, takes 42
+chars and validates with `ethers`. Its unit tests explicitly cover
+`@anon:0x…` ("when not padded"), `@anon:  0x…` (two spaces), and tabs. The
+advisory stays `@anon:\s*0x[0-9a-fA-F]{40}`. The advisory warning and the card's
+parsed-wallet display now share one `parseAnyoneWallet()` function.
+
+**Item 3 — cache the fingerprint until restart.** `_anyone_fingerprint()` is now
+keyed on the `depin-anyone` systemd `InvocationID` (read via unprivileged
+`systemctl show`, no sudo): a successful read is cached until the marker changes
+(next relay start), with a 24h ceiling as a safety net. Negative results keep
+the short 15s TTL; if the marker can't be read the cache falls back to the 60s
+TTL rather than caching indefinitely. Target: ~one sudo log entry per relay
+start instead of one per minute. Config/enable/uninstall still invalidate the
+cache.
+
 ## 2026-09-30 — Anyone fingerprint read: sudoers instead of setuid wrapper; wallet ContactInfo hint
 
 **Why (wrapper → sudoers):** The 2026-09-29 change read the Anyone fingerprint

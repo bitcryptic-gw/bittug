@@ -293,12 +293,10 @@
               <label class="field-label" for="any-nickname">Nickname</label>
               <input type="text" id="any-nickname" class="wingbits-input" placeholder="e.g. MyRelay" autocomplete="off" spellcheck="false">
             </div>
-            <div class="field-group mt">
-              <label class="field-label" for="any-contact">Contact info</label>
-              <input type="text" id="any-contact" class="wingbits-input" placeholder="e.g. you@example.com — add a wallet for rewards" autocomplete="off" spellcheck="false">
-              <span class="hint">To be eligible to claim rewards for this relay, include your EVM wallet address in this field in the format <code>@anon: 0x…</code> — for example <code>@anon: 0x0123456789abcdef0123456789abcdef01234567</code>. Contact info is published in the relay's public descriptor and indexed by search engines, so do not put anything private here.</span>
-              <span class="hint warn-text hidden" id="any-contact-wallet-warn" role="status"></span>
-            </div>
+            <!-- Contact field is rendered from the single shared template in
+                 app.js (anyoneContactFieldHTML) so the first-enable and
+                 post-enable edit forms cannot drift. -->
+            <div class="field-group mt" id="any-contact-field"></div>
             <div class="field-group mt">
               <label class="field-label" for="any-myfamily">MyFamily <span class="dim">(optional)</span></label>
               <input type="text" id="any-myfamily" class="wingbits-input" placeholder="40-char hex fingerprints, comma-separated" autocomplete="off" spellcheck="false">
@@ -313,17 +311,26 @@
             <div class="anyone-id-row">
               <span class="field-label">Nickname</span>
               <span class="anyone-id-value" id="any-nickname-display">—</span>
-              <button class="btn btn-sm" id="btn-any-rename-toggle" type="button">Change</button>
+              <button class="btn btn-sm" id="btn-any-edit-toggle" type="button">Change</button>
             </div>
-            <div class="anyone-rename-form hidden mt" id="any-rename-form">
-              <input type="text" id="any-nickname-new" class="wingbits-input" maxlength="19"
-                     placeholder="New nickname (letters/numbers, max 19)" autocomplete="off" spellcheck="false">
-              <div class="action-row mt-sm">
-                <button class="btn btn-primary btn-sm" id="btn-any-rename-save" type="button">Save nickname</button>
-                <a href="#" class="confirm-cancel" id="any-rename-cancel">&nbsp;Cancel</a>
-                <span class="result-msg" id="depin-result-any-rename"></span>
+            <div class="anyone-id-row mt">
+              <span class="field-label">Contact</span>
+              <span class="anyone-id-value" id="any-contact-display">—</span>
+            </div>
+            <div class="anyone-edit-form hidden mt" id="any-edit-form">
+              <div class="field-group">
+                <label class="field-label" for="any-nickname-new">Nickname</label>
+                <input type="text" id="any-nickname-new" class="wingbits-input" maxlength="19"
+                       placeholder="Nickname (letters/numbers, max 19)" autocomplete="off" spellcheck="false">
               </div>
-              <div class="hint mt-sm">Changing the nickname does not affect the relay fingerprint or its reputation. The new name can take a few hours to appear on network dashboards.</div>
+              <!-- Same shared contact-field template as the first-enable form. -->
+              <div class="field-group mt" id="any-edit-contact-field"></div>
+              <div class="action-row mt-sm">
+                <button class="btn btn-primary btn-sm" id="btn-any-edit-save" type="button">Save changes</button>
+                <a href="#" class="confirm-cancel" id="any-edit-cancel">&nbsp;Cancel</a>
+                <span class="result-msg" id="depin-result-any-edit"></span>
+              </div>
+              <div class="hint mt-sm">Changing the nickname or contact does not affect the relay fingerprint or its reputation. Changes can take a few hours to appear on network dashboards.</div>
             </div>
             <div class="anyone-id-row mt">
               <span class="field-label">Fingerprint</span>

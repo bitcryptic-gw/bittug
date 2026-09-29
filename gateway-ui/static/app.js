@@ -28,6 +28,7 @@ const depinState = {
   updating: null,
   restarting: null,
   checking: false,
+  anyoneSaving: false,
   projects: {},
 };
 
@@ -2271,10 +2272,54 @@ function renderDepin(d) {
   }
 }
 
-// Anyone reward-claim wallet token. Per docs.anyone.io/dashboard/register.md
-// the wallet goes in ContactInfo prefixed with "@anon:" (e.g.
-// "@anon: 0x" + 40 hex). Advisory only — never blocks saving.
+// Anyone reward-claim wallet token found in ContactInfo. Documented form
+// (docs.anyone.io/dashboard/register.md): "@anon: 0x" + 40 hex.
+//
+// Whitespace after the colon is OPTIONAL on purpose. The live Anyone registry
+// parser (anyone-protocol/operator-registry-controller,
+// src/validation/validation.service.ts, extractAtorKey) finds "@anon:"
+// case-insensitively, then the next "0x", and takes 42 chars (validated by
+// ethers). Its unit tests explicitly cover no-space ("@anon:0x…"), one space,
+// two spaces and tabs — all accepted. Warning on "@anon:0x…" would therefore
+// falsely reject a registerable form. Advisory only — never blocks saving.
 const ANYONE_WALLET_RE = /@anon:\s*0x[0-9a-fA-F]{40}\b/;
+
+// Single source for the Anyone contact field (input + reward-wallet helper +
+// advisory warning). Both the first-enable form and the post-enable edit form
+// render it through this template, so the helper text and warning cannot drift.
+function anyoneContactFieldHTML(inputId, warnId) {
+  return '' +
+    `<label class="field-label" for="${inputId}">Contact info</label>` +
+    `<input type="text" id="${inputId}" class="wingbits-input" placeholder="e.g. you@example.com — add a wallet for rewards" autocomplete="off" spellcheck="false">` +
+    `<span class="hint">To be eligible to claim rewards for this relay, include your EVM wallet address in this field in the format <code>@anon: 0x…</code> — for example <code>@anon: 0x0123456789abcdef0123456789abcdef01234567</code>. Contact info is published in the relay's public descriptor and indexed by search engines, so do not put anything private here.</span>` +
+    `<span class="hint warn-text hidden" id="${warnId}" role="status"></span>`;
+}
+
+// The one wallet parser used by BOTH the advisory warning and the card's
+// "Rewards wallet" display, so they can never disagree. Returns the bare
+// "0x…" address, or null when the contact has no well-formed wallet token.
+function parseAnyoneWallet(text) {
+  const m = (text || '').match(ANYONE_WALLET_RE);
+  return m ? m[0].replace(/^@anon:\s*/, '') : null;
+}
+
+function bindAnyoneContact(inputId, warnId) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  const warn = document.getElementById(warnId);
+  input.addEventListener('input', () => anyContactWalletCheck(input, warn));
+  anyContactWalletCheck(input, warn);
+}
+
+// Render the shared contact field into both form slots. Called once at init.
+function initAnyoneForms() {
+  const first = document.getElementById('any-contact-field');
+  if (first) first.innerHTML = anyoneContactFieldHTML('any-contact', 'any-contact-wallet-warn');
+  const edit = document.getElementById('any-edit-contact-field');
+  if (edit) edit.innerHTML = anyoneContactFieldHTML('any-edit-contact', 'any-edit-contact-wallet-warn');
+  bindAnyoneContact('any-contact', 'any-contact-wallet-warn');
+  bindAnyoneContact('any-edit-contact', 'any-edit-contact-wallet-warn');
+}
 
 // Anyone relay identity: nickname + contact (config source of truth) plus the
 // fingerprint read from the relay's data directory via an exact-command sudo
@@ -2290,6 +2335,8 @@ function renderAnyoneIdentity(s) {
 
   const nickEl = document.getElementById('any-nickname-display');
   if (nickEl) nickEl.textContent = d.anyone_nickname || '—';
+  const contactDisplayEl = document.getElementById('any-contact-display');
+  if (contactDisplayEl) contactDisplayEl.textContent = d.anyone_contact || '—';
 
   const fpr = d.anyone_fingerprint || '';
   const fprEl = document.getElementById('any-fingerprint');
@@ -2314,38 +2361,41 @@ function renderAnyoneIdentity(s) {
     if (noteEl) noteEl.classList.add('hidden');
   }
 
-  // Reward wallet parsed from ContactInfo, when present (same source of truth
-  // as the nickname). Hidden when the contact has no well-formed wallet token.
+  // Reward wallet from ContactInfo, using the SAME parser as the advisory
+  // warning so the two can never disagree. Hidden when the contact has no
+  // well-formed wallet token.
   const walletRow = document.getElementById('any-wallet-row');
   const walletEl = document.getElementById('any-wallet');
   if (walletRow && walletEl) {
-    const wm = (d.anyone_contact || '').match(ANYONE_WALLET_RE);
-    if (wm) {
-      walletEl.textContent = wm[0].replace(/^@anon:\s*/, '');
+    const wallet = parseAnyoneWallet(d.anyone_contact);
+    if (wallet) {
+      walletEl.textContent = wallet;
       walletRow.classList.remove('hidden');
     } else {
       walletRow.classList.add('hidden');
     }
   }
 
-  // Keep the rename input in sync with the configured nickname, but never
-  // clobber an in-progress edit (form open) on a 30s poll.
-  const form = document.getElementById('any-rename-form');
-  const input = document.getElementById('any-nickname-new');
-  if (form && form.classList.contains('hidden') && input) {
-    input.value = d.anyone_nickname || '';
+  // Keep the edit inputs in sync with configured values, but never clobber an
+  // in-progress edit (form open) on a 30s poll.
+  const form = document.getElementById('any-edit-form');
+  if (form && form.classList.contains('hidden')) {
+    const nickInput = document.getElementById('any-nickname-new');
+    const contactInput = document.getElementById('any-edit-contact');
+    if (nickInput) nickInput.value = d.anyone_nickname || '';
+    if (contactInput) contactInput.value = d.anyone_contact || '';
+    anyContactWalletCheck(contactInput, document.getElementById('any-edit-contact-wallet-warn'));
   }
 }
 
-// Soft, non-blocking advisory: does the Anyone contact field contain a
-// well-formed wallet token? Informational only — saving is never prevented
-// (a user may legitimately not want rewards, or not have a wallet yet).
-function anyContactWalletCheck() {
-  const input = document.getElementById('any-contact');
-  const warn = document.getElementById('any-contact-wallet-warn');
+// Soft, non-blocking advisory: does the contact field contain a well-formed
+// wallet token? Takes the input+warn elements so the first-enable and edit
+// forms share one implementation. Informational only — saving is never
+// prevented (a user may legitimately not want rewards, or not have a wallet yet).
+function anyContactWalletCheck(input, warn) {
   if (!input || !warn) return;
   const val = (input.value || '').trim();
-  if (!val || ANYONE_WALLET_RE.test(val)) {
+  if (!val || parseAnyoneWallet(val)) {
     warn.textContent = '';
     warn.classList.add('hidden');
     return;
@@ -2360,57 +2410,83 @@ function groupFingerprint(fpr) {
   return (fpr.match(/.{1,4}/g) || []).join(' ');
 }
 
-function anyoneRenameToggle() {
-  const form = document.getElementById('any-rename-form');
-  const toggle = document.getElementById('btn-any-rename-toggle');
+// Toggle/prefill/cancel for the single post-enable edit form (nickname +
+// contact together), so an edit that changes both results in ONE configure
+// call and therefore ONE relay restart.
+function anyoneEditToggle() {
+  const form = document.getElementById('any-edit-form');
+  const toggle = document.getElementById('btn-any-edit-toggle');
   if (!form) return;
   if (form.classList.contains('hidden')) {
+    const s = (depinState.projects && depinState.projects.anyone) || {};
+    const nickInput = document.getElementById('any-nickname-new');
+    const contactInput = document.getElementById('any-edit-contact');
+    if (nickInput) nickInput.value = s.anyone_nickname || '';
+    if (contactInput) contactInput.value = s.anyone_contact || '';
+    anyContactWalletCheck(contactInput, document.getElementById('any-edit-contact-wallet-warn'));
     form.classList.remove('hidden');
     if (toggle) toggle.textContent = 'Cancel';
-    const input = document.getElementById('any-nickname-new');
-    if (input) { input.focus(); input.select(); }
+    if (nickInput) { nickInput.focus(); nickInput.select(); }
   } else {
-    anyoneRenameCancel();
+    anyoneEditCancel();
   }
 }
 
-function anyoneRenameCancel() {
-  const form = document.getElementById('any-rename-form');
-  const toggle = document.getElementById('btn-any-rename-toggle');
-  const input = document.getElementById('any-nickname-new');
+function anyoneEditCancel() {
+  const form = document.getElementById('any-edit-form');
+  const toggle = document.getElementById('btn-any-edit-toggle');
   if (form) form.classList.add('hidden');
   if (toggle) toggle.textContent = 'Change';
-  if (input) input.value = '';
+  depinState.anyoneSaving = false;
 }
 
-async function anyoneRenameSave() {
-  const input = document.getElementById('any-nickname-new');
-  const btn = document.getElementById('btn-any-rename-save');
-  const nick = ((input && input.value) || '').trim();
-  // UX-only mirror of the server-side rule; the server remains authoritative.
-  if (!/^[A-Za-z0-9]{1,19}$/.test(nick)) {
-    showResult('depin-result-any-rename', 'Nickname must be 1-19 letters/numbers only.', true);
+function _anyoneEditSetBusy(busy) {
+  const btn = document.getElementById('btn-any-edit-save');
+  const nickInput = document.getElementById('any-nickname-new');
+  const contactInput = document.getElementById('any-edit-contact');
+  if (btn) { btn.disabled = busy; btn.textContent = busy ? 'Saving…' : 'Save changes'; }
+  if (nickInput) nickInput.disabled = busy;
+  if (contactInput) contactInput.disabled = busy;
+}
+
+async function anyoneEditSave() {
+  // Guard against double-submit / rapid repeats: no overlapping restarts.
+  if (depinState.anyoneSaving) return;
+  const nickInput = document.getElementById('any-nickname-new');
+  const contactInput = document.getElementById('any-edit-contact');
+  const nickname = ((nickInput && nickInput.value) || '').trim();
+  const contact = ((contactInput && contactInput.value) || '').trim();
+  // UX-only mirrors of the server-side rules; the server stays authoritative.
+  if (!/^[A-Za-z0-9]{1,19}$/.test(nickname)) {
+    showResult('depin-result-any-edit', 'Nickname must be 1-19 letters/numbers only.', true);
     return;
   }
-  const current = (depinState.projects && depinState.projects.anyone
-    && depinState.projects.anyone.anyone_nickname) || '';
-  if (nick === current) {
-    showResult('depin-result-any-rename', 'That is already the current nickname.', true);
+  if (!contact) {
+    showResult('depin-result-any-edit', 'Contact info is required.', true);
     return;
   }
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  const cur = (depinState.projects && depinState.projects.anyone) || {};
+  if (nickname === (cur.anyone_nickname || '') && contact === (cur.anyone_contact || '')) {
+    showResult('depin-result-any-edit', 'No changes to save.', true);
+    return;
+  }
+  depinState.anyoneSaving = true;
+  _anyoneEditSetBusy(true);
   try {
-    // Reuse the existing idempotent configure path; omitting contact/myfamily
-    // makes the server preserve the configured values.
-    await api('/api/depin/anyone/configure', 'POST', { nickname: nick });
-    showResult('depin-result-any-rename', 'Nickname updated ✓ (relay restarting)', false);
-    anyoneRenameCancel();
+    // Reuse the existing idempotent configure path, sending BOTH fields in one
+    // call; MyFamily is omitted so the server preserves it. One call = one
+    // restart.
+    await api('/api/depin/anyone/configure', 'POST', { nickname, contact });
+    showResult('depin-result-any-edit', 'Saved ✓ (relay restarting)', false);
+    depinState.anyoneSaving = false;
+    anyoneEditCancel();
     setTimeout(loadDepin, 2000);
     setTimeout(loadDepin, 8000);
   } catch (e) {
-    if (e.message !== 'unauthorized') showResult('depin-result-any-rename', e.message, true);
+    depinState.anyoneSaving = false;
+    if (e.message !== 'unauthorized') showResult('depin-result-any-edit', e.message, true);
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Save nickname'; }
+    _anyoneEditSetBusy(false);
   }
 }
 
@@ -2916,24 +2992,22 @@ function wireEvents() {
     if (restartBtn && !restartBtn.disabled) depinRestart(restartBtn.dataset.project);
   });
 
-  // DePIN — Anyone relay identity: rename + fingerprint copy (static controls)
-  const anyRenameToggle = document.getElementById('btn-any-rename-toggle');
-  if (anyRenameToggle) anyRenameToggle.addEventListener('click', anyoneRenameToggle);
-  const anyRenameSave = document.getElementById('btn-any-rename-save');
-  if (anyRenameSave) anyRenameSave.addEventListener('click', anyoneRenameSave);
-  const anyRenameCancel = document.getElementById('any-rename-cancel');
-  if (anyRenameCancel) anyRenameCancel.addEventListener('click', e => { e.preventDefault(); anyoneRenameCancel(); });
-  const anyNicknameNew = document.getElementById('any-nickname-new');
-  if (anyNicknameNew) anyNicknameNew.addEventListener('keydown', e => {
-    if (e.key === 'Enter') { e.preventDefault(); anyoneRenameSave(); }
+  // DePIN — Anyone relay identity: shared contact field, edit form, copy.
+  initAnyoneForms();
+  const anyEditToggle = document.getElementById('btn-any-edit-toggle');
+  if (anyEditToggle) anyEditToggle.addEventListener('click', anyoneEditToggle);
+  const anyEditSave = document.getElementById('btn-any-edit-save');
+  if (anyEditSave) anyEditSave.addEventListener('click', anyoneEditSave);
+  const anyEditCancel = document.getElementById('any-edit-cancel');
+  if (anyEditCancel) anyEditCancel.addEventListener('click', e => { e.preventDefault(); anyoneEditCancel(); });
+  ['any-nickname-new', 'any-edit-contact'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); anyoneEditSave(); }
+    });
   });
   const anyCopyFpr = document.getElementById('btn-any-copy-fpr');
   if (anyCopyFpr) anyCopyFpr.addEventListener('click', anyoneCopyFingerprint);
-  const anyContact = document.getElementById('any-contact');
-  if (anyContact) {
-    anyContact.addEventListener('input', anyContactWalletCheck);
-    anyContactWalletCheck();
-  }
 
   // DePIN — check for updates now (tab-level trigger)
   if (document.getElementById('btn-depin-run-check')) {
