@@ -3098,10 +3098,12 @@ async def api_depin_configure(_: Auth, project: str, request: Request):
         # simplicity. Restart only when the unit is already active: on a
         # first-time configure it is not yet enabled, and starting it here
         # would pre-empt the user's explicit enable.
-        _anyone_fpr_cache["ts"] = 0.0
         unit = _depin_service_unit("anyone")
         if _service_info(unit)["state"] == "active":
             await _run_async(["sudo", _SYSTEMCTL, "restart", unit], timeout=30)
+        # Invalidate AFTER the restart: a status poll landing during the
+        # restart await could otherwise re-cache the pre-restart read.
+        _anyone_fpr_cache["ts"] = 0.0
 
     return {"ok": True, "project": project, "configured": _depin_is_configured(project)}
 
