@@ -2711,7 +2711,7 @@ def _invalidate_anyone_fingerprint_cache() -> None:
     )
 
 
-def _anyone_fingerprint() -> dict:
+def _anyone_fingerprint(service_state: str = "") -> dict:
     """Read the relay fingerprint via `sudo -n docker exec` (exact-command
     sudoers grant; fixed argv, no shell).
 
@@ -2721,9 +2721,17 @@ def _anyone_fingerprint() -> dict:
     promptly. If the marker is unavailable the short TTL is used instead of an
     indefinite cache. Never raises; any problem — sudoers rule absent, container
     down, file not yet written, malformed content — yields fingerprint=None so
-    the UI renders a neutral state."""
-    now = time.time()
+    the UI renders a neutral state.
+
+    A cached positive is only served while the unit is active: while it is
+    stopped the container is down, so we report neutral WITHOUT spending a sudo
+    read and leave the cache intact (the next start changes the InvocationID and
+    triggers exactly one re-read)."""
     cache = _anyone_fpr_cache
+    if service_state != "active":
+        return {"ts": cache.get("ts", 0.0), "fingerprint": None,
+                "file_nickname": None, "marker": cache.get("marker")}
+    now = time.time()
     age = now - float(cache.get("ts", 0.0))
     marker = _anyone_unit_marker()
     if cache.get("fingerprint") is not None:
@@ -2747,14 +2755,14 @@ def _anyone_fingerprint() -> dict:
     return cache
 
 
-def _anyone_identity() -> dict:
+def _anyone_identity(service_state: str = "") -> dict:
     """Nickname/contact from config (source of truth) plus the relay
     fingerprint. `nickname_pending` is true in the window between a config
     change and the next relay restart, when the fingerprint file still carries
     the previous nickname — config is the intended value."""
     cfg = _anonrc_fields()
     nickname = cfg.get("Nickname") or ""
-    fpr = _anyone_fingerprint()
+    fpr = _anyone_fingerprint(service_state)
     file_nickname = fpr.get("file_nickname")
     return {
         "anyone_nickname": nickname or None,
@@ -2794,7 +2802,7 @@ def _depin_project_status(project: str) -> dict:
     if project == "mastchain":
         extra = _mastchain_hardware_status()
     elif project == "anyone":
-        extra = _anyone_identity()
+        extra = _anyone_identity(service_info["state"])
     return {
         "project": project,
         "installed": installed,
