@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-09-30 — Helium/LoRa optional UI: review follow-ups (recovery, log pills, fetch gating)
+
+Fold-in from review of the hide-when-absent work (commit `f9d6e83`, same day):
+
+- **"Detect again" recovery** in the muted optional-Helium note. `pktfwd.service`
+  runs `scripts/helium-hardware-check.sh probe` as its `ExecCondition` on every
+  start, so the action calls the **existing** `/api/restart/pktfwd` endpoint (the
+  same one the Helium Services card uses), waits ~3 s, and re-polls
+  `/api/status/groups` — the Helium section appears if the probe now finds a
+  concentrator. No new endpoint, no new sudoers entry; on a bare Pi the restart
+  is a harmless condition-skip. (The probe does re-run on restart, so the button
+  path applies rather than a reboot-only message.)
+- **Logs tab can never end up with zero visible active pills:** hiding an active
+  Helium pill now activates the first remaining visible pill when nothing else
+  is active.
+- **Skip `/api/identity`, `/api/beacon` and `/api/bands` while `not_configured`**
+  (the latter two read the gateway-rs journal), resuming as soon as the state is
+  anything else. Unknown/error still fetches everything (fail open).
+- Confirmed the hidden `helium_fault` ntfy checkbox keeps its checked state and
+  is still included in a saved `enabled_alerts`.
+
+Frontend-only; no backend, sudoers, wrapper or service-control change.
+
 ## 2026-09-30 — README: LoRa/Helium framed as one optional module; accurate module/hardware table
 
 Reworked the README so the first screen tells a new reader what BitTug is — a

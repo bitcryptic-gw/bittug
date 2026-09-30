@@ -171,7 +171,18 @@ function applyHeliumVisibility(groupState) {
   const note = document.getElementById('helium-optional-note');
   if (note) note.classList.toggle('hidden', !absent);
   const pill = document.querySelector('.log-pill[data-unit="helium"]');
-  if (pill) pill.classList.toggle('hidden', absent);
+  if (pill) {
+    pill.classList.toggle('hidden', absent);
+    // Never leave the Logs tab with no visible active pill: if hiding the
+    // Helium pill removed the last active one, switch to the first remaining
+    // visible pill. Showing Helium never changes the current selection.
+    if (absent && pill.classList.contains('active')) {
+      const others = Array.from(document.querySelectorAll('.log-pill:not(.hidden)'));
+      if (others.length && !others.some(p => p.classList.contains('active'))) {
+        others[0].classList.add('active');
+      }
+    }
+  }
   const ntfyRow = document.getElementById('ntfy-alert-helium-row');
   if (ntfyRow) ntfyRow.classList.toggle('hidden', absent);
 }
@@ -183,6 +194,31 @@ async function refreshHeliumHardware() {
   } catch (e) {
     // Fail open: on any error, leave the current (default: visible) state.
   }
+}
+
+// Recovery path for a real concentrator wrongly shown as absent: restarting
+// pktfwd re-runs its ExecCondition (scripts/helium-hardware-check.sh probe),
+// which rewrites /run/gateway/helium-hardware-present, then we re-poll. Uses
+// the SAME existing restart endpoint as the Helium Services card — no new
+// endpoint, no new sudoers entry. On a bare Pi this restart is a harmless
+// condition-skip.
+async function detectHeliumAgain() {
+  const link = document.getElementById('btn-helium-detect');
+  const res  = document.getElementById('helium-detect-result');
+  if (link) { link.textContent = 'detecting…'; link.style.pointerEvents = 'none'; }
+  if (res) res.textContent = '';
+  try {
+    await api('/api/restart/pktfwd', 'POST');
+  } catch (e) {
+    if (res && e.message !== 'unauthorized') res.textContent = 'Restart failed';
+  }
+  // pktfwd's probe (5 × 0.3 s settle retries) runs before systemctl returns,
+  // so this is just a short buffer before re-reading the marker.
+  await new Promise(r => setTimeout(r, 3000));
+  if (link) { link.textContent = 'Detect again'; link.style.pointerEvents = ''; }
+  await loadApplications();
+  const section = document.getElementById('helium-app-section');
+  if (res && section && section.classList.contains('hidden')) res.textContent = 'No concentrator detected';
 }
 
 function renderDashServices(d) {
@@ -222,20 +258,32 @@ function renderDashServices(d) {
 // ── Applications: Helium + Wingbits ──────────────────────────────────────────
 
 async function loadApplications() {
-  const [identity, status, beacon, bands, wingbits, groups] = await Promise.allSettled([
-    api('/api/identity'),
-    api('/api/status'),
-    api('/api/beacon'),
-    api('/api/bands'),
+  // Resolve the Helium hardware state first: /api/identity, /api/beacon and
+  // /api/bands read the gateway-rs journal / config and are skipped entirely
+  // while the probe says no concentrator is present, so a bare device is not
+  // polled for cards nobody can see. Any error means "unknown" (fail open):
+  // the Helium UI stays visible and the fetches proceed.
+  let heliumGroupState;
+  try {
+    heliumGroupState = (await api('/api/status/groups')).helium?.group_state;
+  } catch (e) {
+    heliumGroupState = undefined;
+  }
+  applyHeliumVisibility(heliumGroupState);
+  const heliumAbsent = heliumGroupState === HELIUM_ABSENT_STATE;
+
+  const [identity, status, beacon, bands, wingbits] = await Promise.allSettled([
+    heliumAbsent ? Promise.resolve(null) : api('/api/identity'),
+    heliumAbsent ? Promise.resolve(null) : api('/api/status'),
+    heliumAbsent ? Promise.resolve(null) : api('/api/beacon'),
+    heliumAbsent ? Promise.resolve(null) : api('/api/bands'),
     api('/api/wingbits'),
-    api('/api/status/groups'),
   ]);
 
-  if (groups.status   === 'fulfilled') applyHeliumVisibility((groups.value.helium || {}).group_state);
-  if (identity.status === 'fulfilled') renderAppIdentity(identity.value);
-  if (status.status   === 'fulfilled') renderHeliumServices(status.value);
-  if (beacon.status   === 'fulfilled') renderBeacon(beacon.value);
-  if (bands.status    === 'fulfilled') renderBands(bands.value);
+  if (identity.status === 'fulfilled' && identity.value) renderAppIdentity(identity.value);
+  if (status.status   === 'fulfilled' && status.value)   renderHeliumServices(status.value);
+  if (beacon.status   === 'fulfilled' && beacon.value)   renderBeacon(beacon.value);
+  if (bands.status    === 'fulfilled' && bands.value)    renderBands(bands.value);
   if (wingbits.status === 'fulfilled') renderWingbits(wingbits.value);
 }
 
@@ -2959,6 +3007,10 @@ function wireEvents() {
 
   // Applications — band
   document.getElementById('btn-apply-band').addEventListener('click', applyBand);
+
+  // Applications — Helium "Detect again" recovery link
+  const heliumDetect = document.getElementById('btn-helium-detect');
+  if (heliumDetect) heliumDetect.addEventListener('click', e => { e.preventDefault(); detectHeliumAgain(); });
 
   // Settings — timezone
   document.getElementById('btn-apply-timezone').addEventListener('click', applyTimezone);
