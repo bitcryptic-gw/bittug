@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-09-30 — Static caching: revalidate index.html so a post-OTA reload can't reuse old assets
+
+Investigated whether a page can keep running stale JavaScript after an OTA. The
+device serves `index.html` with **no** `Cache-Control`/`ETag`/`Last-Modified`,
+and `app.js`/`style.css` with `ETag` + `Last-Modified` but no `Cache-Control`;
+both assets are referenced as `/static/…?v=v<GATEWAY_VERSION>`. Because the
+version changes on every OTA commit (`git describe --tags --always`), a fresh
+index always points at a new asset URL — stale JS is unlikely. The residual gap
+was the document itself: without any cache directive a browser *could* reuse a
+cached `index.html` and thus keep the old version query. The `index()` response
+now sets `Cache-Control: no-cache` (revalidate) — a one-line, no-dependency fix
+that guarantees a reload always fetches the current version. Static asset
+caching is unchanged (versioned URLs make it safe; `ETag` still allows 304s).
+Note: the round-4 symptom that prompted this was actually a CSS bug (see the
+wallet-button entry), not stale JS.
+
 ## 2026-09-30 — Anyone card: wallet button states, the real `.hidden` CSS bug, caution hint
 
 Gary saw the **Rewards wallet** row showing a valid wallet *and* an **Add

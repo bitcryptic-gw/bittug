@@ -351,7 +351,13 @@ def index(request: Request):
     html = html.replace("{{ wingbits_dashboard_url }}", _wingbits_dashboard_url())
     html = html.replace("{{ aircraft_count }}", _aircraft_tracked_count())
     html = html.replace("{{ satellites_count }}", _satellites_in_view_count())
-    return HTMLResponse(html)
+    # index.html must always be revalidated: it carries the
+    # /static/app.js?v=<version> / style.css?v=<version> cache-busting query
+    # derived from GATEWAY_VERSION. If a browser served a cached document, it
+    # would keep requesting the previous version's assets after an update. The
+    # versioned assets themselves keep their ETag/Last-Modified (they are
+    # immutable per URL, so caching them is safe and efficient).
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
