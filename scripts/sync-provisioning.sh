@@ -87,17 +87,14 @@ gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker run --rm -v /var/lib/gateway-ui/
 # on the docker pull grants above is escaped; this path has no `:`, so the
 # only metacharacter is the fixed `/var/lib/anon/fingerprint`.
 gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker exec anyone cat /var/lib/anon/fingerprint
-# DePIN log reads (Honeygain's output goes to Docker's json-file log driver,
-# not journald). One exact line per container name — no wildcard, no globbing.
-# Sudo matches the arguments exactly, so `--tail 50` is a constant that must
-# stay in sync with DEPIN_LOG_LINES in gateway-ui/main.py. This replaces the
-# setuid depin-logs-wrapper binary (removed below); the binary's hardcoded
-# allowlist maps one-to-one onto these five lines.
+# DePIN log read (Honeygain's output goes to Docker's json-file log driver, not
+# journald; the other four projects read journald, which works). Exact command
+# + arguments, no wildcard, no globbing; sudo matches the arguments exactly, so
+# `--tail 50` is a constant that must stay in sync with DEPIN_LOG_LINES in
+# gateway-ui/main.py. Honeygain is the only caller — no grant is carried for a
+# project that doesn't use it. Add a line here alongside any future code that
+# needs one.
 gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker logs --tail 50 honeygain
-gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker logs --tail 50 urnetwork
-gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker logs --tail 50 myst
-gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker logs --tail 50 anyone
-gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker logs --tail 50 mastchain
 SUDOERS
 chmod 0440 "$SUDOERS_TMP"
 if visudo -c -f "$SUDOERS_TMP"; then

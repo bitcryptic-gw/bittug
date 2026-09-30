@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-09-30 — DePIN logs: trim docker-logs sudoers grants to Honeygain only
+
+Round 4 replaced the setuid `depin-logs-wrapper` with five exact-command sudoers
+lines mirroring the wrapper's allowlist. Only Honeygain actually calls
+`docker logs` (`_depin_project_status`); the other four projects read journald,
+so four of the five grants were unused privilege. Removed them:
+`sync-provisioning.sh`'s sudoers heredoc now carries the single
+`gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker logs --tail 50 honeygain`
+line (fingerprint line unchanged). The whole file is still regenerated from the
+heredoc through the existing atomic path (temp → `visudo -c -f` → `mv`, 0440
+root:root), so devices that already had all five lines lose the four unused ones
+on the next run rather than accumulating stale grants. No code path referenced
+the removed grants.
+
 ## 2026-09-30 — Anyone card: make the Change form discoverable for Contact; inline Add wallet
 
 **Why:** only the Nickname row had a Change button and opening the form focused
