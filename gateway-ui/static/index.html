@@ -327,6 +327,8 @@
               </div>
               <!-- Same shared contact-field template as the first-enable form. -->
               <div class="field-group mt" id="any-edit-contact-field"></div>
+              <!-- Shown only when the SAVED contact holds a valid wallet. -->
+              <p class="hint hidden mt-sm" id="any-edit-wallet-hint">Changing the wallet points this relay at a different account. All relays you run should use the same wallet. If this relay is already locked or claimed on the Anyone dashboard, check what changing the wallet does there before saving.</p>
               <div class="action-row mt-sm">
                 <button class="btn btn-primary btn-sm" id="btn-any-edit-save" type="button">Save changes</button>
                 <a href="#" class="confirm-cancel" id="any-edit-cancel">&nbsp;Cancel</a>
@@ -342,7 +344,7 @@
             <div class="anyone-id-row mt hidden" id="any-wallet-row">
               <span class="field-label">Rewards wallet</span>
               <code class="anyone-fpr" id="any-wallet">—</code>
-              <button class="btn btn-sm hidden" id="btn-any-add-wallet" type="button">Add wallet</button>
+              <button class="btn btn-sm" id="btn-any-wallet-toggle" type="button">Add wallet</button>
             </div>
             <div class="hint hidden" id="any-fpr-note"></div>
           </div>

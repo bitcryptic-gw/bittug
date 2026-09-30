@@ -79,7 +79,12 @@ html, body {
 
 .modal-box input[type="password"]:focus { border-color: var(--blue); }
 
-.hidden { display: none; }
+/* !important so a component class that also sets `display` (e.g. .btn
+   inline-flex, .action-row flex — both defined later in this file with the same
+   specificity) cannot override the utility and leave a "hidden" element
+   visible. This was the real cause of round-4's Add wallet button showing
+   beside a valid wallet (the class was toggled correctly; the CSS lost). */
+.hidden { display: none !important; }
 .error { color: var(--red); font-size: .85rem; }
 .error.hidden { display: none; }
 

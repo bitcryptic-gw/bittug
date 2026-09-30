@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-09-30 — Anyone card: wallet button states, the real `.hidden` CSS bug, caution hint
+
+Gary saw the **Rewards wallet** row showing a valid wallet *and* an **Add
+wallet** button. Root cause found by testing: **not** stale JS but a CSS
+specificity bug — `.hidden { display:none }` is defined before
+`.btn { display:inline-flex }`, same specificity, so the later `.btn` rule won
+and a `class="btn … hidden"` element stayed visible. Round-4's JS toggled the
+class correctly; the CSS lost. Fixed `.hidden` to `display:none !important`
+(also corrects the NTFY "Clear" button and the OTA "View OTA log" button, which
+had the same latent bug).
+
+Per decision, the button is now always visible on a configured card and
+labelled by state via the single shared parser `parseAnyoneWallet(contact)`:
+**Add wallet** (no valid wallet) / **Change wallet** (valid wallet).
+- **Add wallet**: opens the shared form, focuses Contact, appends ` @anon: `
+  only when no `@anon:` token exists (else caret at end).
+- **Change wallet**: opens the form, focuses Contact, and selects **exactly the
+  42-character `0x…` address** (`setSelectionRange` from the regex match range),
+  so typing replaces the address and leaves the email + `@anon:` prefix intact.
+- The new `anyoneWalletMatch()` returns `{wallet,start,end}`; `parseAnyoneWallet`
+  wraps it, so the advisory, the card display, and the selection share one
+  implementation.
+- Clicking the wallet button while the form is already open does **not** close
+  it — it re-applies focus/selection. Nickname/Contact Change-Cancel labels are
+  unaffected; the wallet label updates on save/poll (add → change) without a
+  reload and without clobbering an in-progress edit.
+- Added a non-blocking caution hint (`#any-edit-wallet-hint`, its own element)
+  shown only when the **saved** contact holds a valid wallet.
+
 ## 2026-09-30 — DePIN logs: trim docker-logs sudoers grants to Honeygain only
 
 Round 4 replaced the setuid `depin-logs-wrapper` with five exact-command sudoers

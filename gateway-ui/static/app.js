@@ -2345,12 +2345,24 @@ function anyoneContactFieldHTML(inputId, warnId) {
     `<span class="hint warn-text hidden" id="${warnId}" role="status"></span>`;
 }
 
-// The one wallet parser used by BOTH the advisory warning and the card's
-// "Rewards wallet" display, so they can never disagree. Returns the bare
-// "0x…" address, or null when the contact has no well-formed wallet token.
-function parseAnyoneWallet(text) {
+// The one wallet matcher used by the advisory warning, the card's "Rewards
+// wallet" display, and the wallet button's Change-wallet selection, so they can
+// never disagree. Returns { wallet, start, end } — the bare "0x…" address and
+// its exact [start,end) range in `text` — or null when there is no well-formed
+// token. `start` is the regex match position plus the offset of the address
+// within the matched "@anon: 0x…" substring, so exactly the 42-char address is
+// selected regardless of the whitespace after the colon.
+function anyoneWalletMatch(text) {
   const m = (text || '').match(ANYONE_WALLET_RE);
-  return m ? m[0].replace(/^@anon:\s*/, '') : null;
+  if (!m) return null;
+  const addrOffset = m[0].indexOf('0x');
+  const start = m.index + addrOffset;
+  return { wallet: m[0].slice(addrOffset), start, end: start + 42 };
+}
+
+function parseAnyoneWallet(text) {
+  const m = anyoneWalletMatch(text);
+  return m ? m.wallet : null;
 }
 
 function bindAnyoneContact(inputId, warnId) {
@@ -2412,19 +2424,25 @@ function renderAnyoneIdentity(s) {
   }
 
   // Reward wallet from ContactInfo, using the SAME parser as the advisory
-  // warning so the two can never disagree. Hidden when the contact has no
-  // well-formed wallet token.
+  // warning so the two can never disagree. The wallet row always renders on a
+  // configured card, and the button is always visible and labelled by state:
+  // "Add wallet" (no valid wallet) or "Change wallet" (valid wallet).
   const walletRow = document.getElementById('any-wallet-row');
   const walletEl = document.getElementById('any-wallet');
-  const addWalletBtn = document.getElementById('btn-any-add-wallet');
+  const walletBtn = document.getElementById('btn-any-wallet-toggle');
+  const wallet = parseAnyoneWallet(d.anyone_contact);
   if (walletRow && walletEl) {
-    const wallet = parseAnyoneWallet(d.anyone_contact);
-    // Always show the row ("Rewards wallet —" when empty) and offer the inline
-    // Add wallet action only when there is no wallet token in the contact.
     walletEl.textContent = wallet || '—';
     walletRow.classList.remove('hidden');
-    if (addWalletBtn) addWalletBtn.classList.toggle('hidden', !!wallet);
   }
+  if (walletBtn) {
+    walletBtn.textContent = wallet ? 'Change wallet' : 'Add wallet';
+    walletBtn.dataset.state = wallet ? 'change' : 'add';
+  }
+  // Caution hint in the edit form: shown only when the SAVED contact holds a
+  // valid wallet. Its own element (not the advisory warning element).
+  const walletHint = document.getElementById('any-edit-wallet-hint');
+  if (walletHint) walletHint.classList.toggle('hidden', !wallet);
 
   // Keep the edit inputs in sync with configured values, but never clobber an
   // in-progress edit (form open) on a 30s poll.
@@ -2507,20 +2525,39 @@ function _anyoneEditSetToggles(open) {
   });
 }
 
-// Inline "Add wallet": opens the shared form focused on Contact and appends the
-// "@anon: " reward-wallet prefix, but only when the contact has no @anon: token
-// already. Never submits — the user still clicks "Save changes".
-function anyoneAddWallet() {
+// Inline wallet button. Always visible on a configured card; its label/state is
+// set by renderAnyoneIdentity. Opens the single shared form (and never closes it
+// if already open), then:
+//   - state 'add'    → focus Contact and append " @anon: " only when no @anon:
+//                      token exists (otherwise just caret-at-end).
+//   - state 'change' → focus Contact and select EXACTLY the 42-char 0x… address,
+//                      so typing replaces the address and leaves the email and
+//                      the "@anon:" prefix untouched.
+// Never submits — the user still clicks "Save changes".
+function anyoneWalletClick() {
+  const btn = document.getElementById('btn-any-wallet-toggle');
   const form = document.getElementById('any-edit-form');
   const contactInput = document.getElementById('any-edit-contact');
   if (form && form.classList.contains('hidden')) anyoneEditToggle('contact');
   if (!contactInput) return;
-  const val = contactInput.value || '';
-  if (!/@anon:/i.test(val)) {
-    const sep = (val.length > 0 && !/\s$/.test(val)) ? ' ' : '';
-    contactInput.value = val + sep + '@anon: ';
+  const state = (btn && btn.dataset.state) || (parseAnyoneWallet(contactInput.value) ? 'change' : 'add');
+  if (state === 'change') {
+    const m = anyoneWalletMatch(contactInput.value);
+    if (m) {
+      contactInput.focus();
+      contactInput.setSelectionRange(m.start, m.end);
+    } else {
+      // An in-progress edit removed/renamed the token: just place the caret.
+      _anyoneEditFocusContact(contactInput);
+    }
+  } else {
+    const val = contactInput.value || '';
+    if (!/@anon:/i.test(val)) {
+      const sep = (val.length > 0 && !/\s$/.test(val)) ? ' ' : '';
+      contactInput.value = val + sep + '@anon: ';
+    }
+    _anyoneEditFocusContact(contactInput);
   }
-  _anyoneEditFocusContact(contactInput);
   anyContactWalletCheck(contactInput, document.getElementById('any-edit-contact-wallet-warn'));
 }
 
@@ -3091,8 +3128,8 @@ function wireEvents() {
   if (anyEditToggle) anyEditToggle.addEventListener('click', () => anyoneEditToggle('nickname'));
   const anyContactToggle = document.getElementById('btn-any-edit-contact-toggle');
   if (anyContactToggle) anyContactToggle.addEventListener('click', () => anyoneEditToggle('contact'));
-  const anyAddWallet = document.getElementById('btn-any-add-wallet');
-  if (anyAddWallet) anyAddWallet.addEventListener('click', anyoneAddWallet);
+  const anyWalletBtn = document.getElementById('btn-any-wallet-toggle');
+  if (anyWalletBtn) anyWalletBtn.addEventListener('click', anyoneWalletClick);
   const anyEditSave = document.getElementById('btn-any-edit-save');
   if (anyEditSave) anyEditSave.addEventListener('click', anyoneEditSave);
   const anyEditCancel = document.getElementById('any-edit-cancel');
