@@ -10,6 +10,11 @@
 #include <errno.h>
 #include <signal.h>
 
+/* Inherited service environment — scanned (names+values of GIT_*) only by the
+   git-failure diagnostics. The git children themselves receive the explicit,
+   minimal envp built in main(), never this. */
+extern char **environ;
+
 #define REPO_DIR "/opt/gateway"
 #define ALLOWED_UNITS \
     "pktfwd.service,gateway-rs.service,gateway-ui.service," \
@@ -70,6 +75,128 @@ static int run_capture(char *const argv[], char *buf, size_t bufsz) {
     return -1;
 }
 
+/* Run argv via execve with an EXPLICIT environment (envp), so git never
+   inherits the gateway-ui service's environment. argv[0] must be an absolute
+   path (execve does not search PATH). Stdio is inherited. Return exit code. */
+static int run_env(char *const argv[], char *const envp[]) {
+    pid_t pid = fork();
+    if (pid == -1) return -1;
+    if (pid == 0) {
+        execve(argv[0], argv, envp);
+        _exit(127);
+    }
+    int status;
+    waitpid(pid, &status, 0);
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    return -1;
+}
+
+/* Like run_capture, but with an explicit environment. */
+static int run_capture_env(char *const argv[], char *buf, size_t bufsz,
+                           char *const envp[]) {
+    int pipefd[2];
+    if (pipe(pipefd) == -1) return -1;
+    pid_t pid = fork();
+    if (pid == -1) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return -1;
+    }
+    if (pid == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+        execve(argv[0], argv, envp);
+        _exit(127);
+    }
+    close(pipefd[1]);
+    ssize_t n = read(pipefd[0], buf, bufsz - 1);
+    if (n > 0) buf[n] = '\0';
+    else buf[0] = '\0';
+    close(pipefd[0]);
+    int status;
+    waitpid(pid, &status, 0);
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    return -1;
+}
+
+/* Run one diagnostic git command as the current (dropped-privilege) user with
+   both its stdout and stderr captured into a pipe, then emit the combined
+   output to OUR stderr so it reaches both the SSE stream and the OTA log.
+   Fixed argv, no shell. */
+static void diag_cmd(const char *label, char *const argv[], char *const envp[]) {
+    fprintf(stderr, "--- %s ---\n", label);
+    int pipefd[2];
+    if (pipe(pipefd) == -1) {
+        fprintf(stderr, "(pipe failed: %s)\n", strerror(errno));
+        return;
+    }
+    pid_t pid = fork();
+    if (pid == -1) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        fprintf(stderr, "(fork failed: %s)\n", strerror(errno));
+        return;
+    }
+    if (pid == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        dup2(pipefd[1], STDERR_FILENO);
+        close(pipefd[1]);
+        execve(argv[0], argv, envp);
+        _exit(127);
+    }
+    close(pipefd[1]);
+    char buf[4096];
+    ssize_t n;
+    int any = 0;
+    while ((n = read(pipefd[0], buf, sizeof(buf))) > 0) {
+        fwrite(buf, 1, (size_t)n, stderr);
+        any = 1;
+    }
+    close(pipefd[0]);
+    int status;
+    waitpid(pid, &status, 0);
+    if (!any) fprintf(stderr, "(no output)\n");
+}
+
+/* Diagnose a git failure without dumping the (possibly secret-bearing) service
+   environment. Runs fixed-argv git subcommands as the current dropped-privilege
+   user, and reports inherited GIT_* names+values only. */
+static void git_diagnostics(const char *what, char *const git_envp[],
+                            const char *git_home) {
+    fprintf(stderr, "=== OTA git diagnostics (%s) ===\n", what);
+    fprintf(stderr, "real_uid=%ld effective_uid=%ld real_gid=%ld effective_gid=%ld\n",
+            (long)getuid(), (long)geteuid(), (long)getgid(), (long)getegid());
+    fprintf(stderr, "git_child_HOME=%s\n", git_home ? git_home : "");
+
+    /* GIT_* variables inherited from the gateway-ui service environment (what
+       the OLD inherited-env pull would have seen). Names and values only. */
+    int found = 0;
+    for (char **e = environ; e && *e; e++) {
+        if (strncmp(*e, "GIT_", 4) == 0) {
+            fprintf(stderr, "GIT_ENV_INHERITED %s\n", *e);
+            found = 1;
+        }
+    }
+    if (!found) fprintf(stderr, "GIT_ENV_INHERITED (none)\n");
+
+    diag_cmd("git rev-parse HEAD",
+             (char *[]){"/usr/bin/git", "rev-parse", "HEAD", NULL}, git_envp);
+    diag_cmd("git rev-parse FETCH_HEAD",
+             (char *[]){"/usr/bin/git", "rev-parse", "FETCH_HEAD", NULL}, git_envp);
+    diag_cmd("git rev-parse origin/main",
+             (char *[]){"/usr/bin/git", "rev-parse", "origin/main", NULL}, git_envp);
+    diag_cmd("git merge-base HEAD origin/main",
+             (char *[]){"/usr/bin/git", "merge-base", "HEAD", "origin/main", NULL}, git_envp);
+    diag_cmd("git status -sb",
+             (char *[]){"/usr/bin/git", "status", "-sb", NULL}, git_envp);
+    diag_cmd("git config --show-origin --get-regexp ^(pull|branch)\\.",
+             (char *[]){"/usr/bin/git", "config", "--show-origin", "--get-regexp",
+                        "^(pull|branch)\\.", NULL}, git_envp);
+    fprintf(stderr, "=== end OTA git diagnostics ===\n");
+}
+
 static void die(const char *call, const char *ctx) {
     fprintf(stderr, "ERROR: %s failed at %s: %s\n", call, ctx, strerror(errno));
     exit(1);
@@ -113,6 +240,34 @@ int main(int argc, char *argv[]) {
     }
     uid_t repo_owner = st.st_uid;
 
+    /* Deterministic environment for every git child. The gateway-ui service
+       runs with no usable HOME (the account is nologin and has no home dir),
+       and its environment is otherwise inherited from systemd. Clearing it for
+       git removes any environment-based config (HOME/.gitconfig, GIT_CONFIG_*,
+       GIT_DIR, GIT_WORK_TREE, …) as an explanation for an OTA pull failing.
+       HOME is set to the repo owner's home so a legitimate per-user gitconfig
+       (credentials, includes) still resolves. LANG=C keeps output parsable;
+       GIT_TERMINAL_PROMPT=0 makes any auth prompt fail closed instead of
+       hanging the SSE stream. */
+    struct passwd *owner_pw = getpwuid(repo_owner);
+    char owner_home[256];
+    if (owner_pw && owner_pw->pw_dir && owner_pw->pw_dir[0]) {
+        snprintf(owner_home, sizeof(owner_home), "%s", owner_pw->pw_dir);
+    } else {
+        snprintf(owner_home, sizeof(owner_home), "/tmp");
+        fprintf(stderr, "WARNING: no passwd entry/home for repo owner uid %ld — "
+                        "using /tmp as git HOME\n", (long)repo_owner);
+    }
+    char home_env[320];
+    snprintf(home_env, sizeof(home_env), "HOME=%s", owner_home);
+    char *git_envp[] = {
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        home_env,
+        "LANG=C",
+        "GIT_TERMINAL_PROMPT=0",
+        NULL,
+    };
+
     /* chdir to repo */
     if (chdir(REPO_DIR) != 0) {
         fprintf(stderr, "ERROR: cannot chdir to %s: %s\n", REPO_DIR, strerror(errno));
@@ -126,16 +281,18 @@ int main(int argc, char *argv[]) {
         if (setegid(0) != 0)
             die("setegid(0)", "--changes mode");
 
-        int fetch_rc = run((char *[]){"/usr/bin/git", "fetch", "origin", NULL});
+        int fetch_rc = run_env((char *[]){"/usr/bin/git", "fetch", "origin", NULL},
+                               git_envp);
         if (fetch_rc != 0) {
             fprintf(stderr, "ERROR: git fetch origin failed (exit %d)\n", fetch_rc);
+            git_diagnostics("--changes: git fetch origin failed", git_envp, owner_home);
             return 1;
         }
 
         char diff_buf[65536];
-        int diff_rc = run_capture(
+        int diff_rc = run_capture_env(
             (char *[]){"/usr/bin/git", "diff", "--name-only", "HEAD..origin/main", NULL},
-            diff_buf, sizeof(diff_buf));
+            diff_buf, sizeof(diff_buf), git_envp);
         if (diff_rc != 0) {
             fprintf(stderr, "ERROR: git diff failed (exit %d)\n", diff_rc);
             return 1;
@@ -179,20 +336,30 @@ int main(int argc, char *argv[]) {
 
     /* Capture pre-pull HEAD */
     char pre_head[128] = "";
-    run_capture((char *[]){"/usr/bin/git", "rev-parse", "HEAD", NULL},
-                pre_head, sizeof(pre_head));
+    run_capture_env((char *[]){"/usr/bin/git", "rev-parse", "HEAD", NULL},
+                    pre_head, sizeof(pre_head), git_envp);
     if (pre_head[0]) {
         char *nl = strchr(pre_head, '\n');
         if (nl) *nl = '\0';
     }
 
-    /* git pull as repo owner */
+    /* Fast-forward-only update of the explicit remote/branch. `--ff-only` on
+       the command line means no implicit merge/rebase and no dependency on the
+       pull.* config (the ambiguity behind "Need to specify how to reconcile
+       divergent branches"). A non-fast-forward is refused, never forced. */
     if (seteuid(repo_owner) != 0)
         die("seteuid(repo_owner)", "pre-pull privilege drop");
     if (setegid(0) != 0)
         die("setegid(0)", "pre-pull privilege drop");
 
-    int pull_rc = run((char *[]){"/usr/bin/git", "pull", NULL});
+    int pull_rc = run_env(
+        (char *[]){"/usr/bin/git", "pull", "--ff-only", "origin", "main", NULL},
+        git_envp);
+
+    if (pull_rc != 0) {
+        fprintf(stderr, "ERROR: git pull --ff-only origin main failed (exit %d)\n", pull_rc);
+        git_diagnostics("git pull --ff-only origin main", git_envp, owner_home);
+    }
 
     /* Restore root */
     if (seteuid(0) != 0)
@@ -201,7 +368,6 @@ int main(int argc, char *argv[]) {
         die("setegid(0)", "post-pull privilege restore");
 
     if (pull_rc != 0) {
-        fprintf(stderr, "ERROR: git pull failed (exit %d)\n", pull_rc);
         return 1;
     }
 
@@ -218,8 +384,8 @@ int main(int argc, char *argv[]) {
 
     /* Capture post-pull HEAD */
     char post_head[128] = "";
-    run_capture((char *[]){"/usr/bin/git", "rev-parse", "HEAD", NULL},
-                post_head, sizeof(post_head));
+    run_capture_env((char *[]){"/usr/bin/git", "rev-parse", "HEAD", NULL},
+                    post_head, sizeof(post_head), git_envp);
     if (post_head[0]) {
         char *nl = strchr(post_head, '\n');
         if (nl) *nl = '\0';
@@ -230,7 +396,7 @@ int main(int argc, char *argv[]) {
         die("seteuid(repo_owner)", "tag fetch privilege drop");
     if (setegid(0) != 0)
         die("setegid(0)", "tag fetch privilege drop");
-    run((char *[]){"/usr/bin/git", "fetch", "--tags", NULL});
+    run_env((char *[]){"/usr/bin/git", "fetch", "--tags", NULL}, git_envp);
     if (seteuid(0) != 0)
         die("seteuid(0)", "tag fetch privilege restore");
     if (setegid(0) != 0)
@@ -243,9 +409,9 @@ int main(int argc, char *argv[]) {
     if (setegid(0) != 0)
         die("setegid(0)", "git describe privilege drop");
     char describe_buf[256] = "";
-    int describe_rc = run_capture(
+    int describe_rc = run_capture_env(
         (char *[]){"/usr/bin/git", "-C", REPO_DIR, "describe", "--tags", "--always", NULL},
-        describe_buf, sizeof(describe_buf));
+        describe_buf, sizeof(describe_buf), git_envp);
     if (seteuid(0) != 0)
         die("seteuid(0)", "git describe privilege restore");
     if (setegid(0) != 0)
@@ -293,7 +459,7 @@ int main(int argc, char *argv[]) {
             "/usr/bin/git", "diff", "--name-only", pre_head, post_head, NULL
         };
         char diff_buf[8192];
-        int diff_rc = run_capture(diff_argv, diff_buf, sizeof(diff_buf));
+        int diff_rc = run_capture_env(diff_argv, diff_buf, sizeof(diff_buf), git_envp);
         if (diff_rc == 0 && diff_buf[0]) {
             fputs(diff_buf, stdout);
             if (diff_buf[strlen(diff_buf) - 1] != '\n')

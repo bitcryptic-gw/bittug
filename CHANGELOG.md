@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-09-30 — OTA wrapper: fast-forward-only pull, deterministic git env, failure diagnostics
+
+**Why:** Perth's first OTA to `v2026.09.29` failed with git exit 128 ("Need to
+specify how to reconcile divergent branches") on a clean fast-forward, and a
+retry after a browser refresh succeeded — cause unexplained. The wrapper ran a
+bare `git pull` with the real uid `gateway-ui`, inheriting the gateway-ui
+service environment.
+
+**What changed (`scripts/ota-update-wrapper.c`):**
+- The bare `git pull` is now an explicit fast-forward-only update of an explicit
+  remote/branch: `git pull --ff-only origin main`. No implicit merge or rebase,
+  no dependency on `pull.ff`/`pull.rebase`, no hard reset ever.
+- Every git child now runs with a **deterministic, explicit environment** (via
+  `execve`, not inherited `execvp`): `PATH`, `HOME` set to the repo owner's home
+  from `getpwuid`, `LANG=C`, `GIT_TERMINAL_PROMPT=0`. This removes inherited
+  `HOME`/`GIT_CONFIG_*`/`GIT_DIR`/`GIT_WORK_TREE` as an explanation. Verified the
+  repo needs none of them (origin is public HTTPS, no credential helper, no
+  per-user gitconfig on the device).
+- On **any** git failure, a diagnostics block is emitted to stderr (reaching the
+  SSE stream and OTA log): real/effective uid+gid, the git-child `HOME`,
+  inherited `GIT_*` names+values only, and the output of `git rev-parse HEAD`,
+  `rev-parse FETCH_HEAD`, `rev-parse origin/main`, `merge-base HEAD
+  origin/main`, `status -sb`, and `config --show-origin --get-regexp
+  '^(pull|branch)\.'`. It does **not** dump the service environment. All
+  diagnostic commands run as the dropped-privilege user, fixed argv, no shell.
+- Security properties unchanged: fixed argv, allowlisted service list, no
+  widening. Exit-code contract with main.py/frontend unchanged.
+
 ## 2026-09-30 — DePIN logs: exact-command sudoers instead of the setuid `depin-logs-wrapper`
 
 **Why:** `depin-logs-wrapper` was a setuid-root binary that exec'd `docker logs
