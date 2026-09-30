@@ -1959,13 +1959,41 @@ async def api_system_ota_changes(_: Auth):
     }
 
 
-_ota_running = False
+# In-progress guard for OTA updates, held for the duration of the streamed
+# update. It is released in the stream's finally block (covering a non-zero
+# wrapper exit and normal completion) and on any error while constructing the
+# response. A max-age backstop expires a flag that leaked because the stream
+# generator was never iterated (client disconnect before the first chunk), so a
+# retry can never wedge forever on a stale 409.
+_OTA_LOCK_MAX_AGE = 30 * 60  # seconds
+
+
+class _OtaLock:
+    def __init__(self) -> None:
+        self._active = False
+        self._started = 0.0
+
+    def busy(self) -> bool:
+        if not self._active:
+            return False
+        if time.time() - self._started > _OTA_LOCK_MAX_AGE:
+            self._active = False
+            return False
+        return True
+
+    def acquire(self) -> None:
+        self._active = True
+        self._started = time.time()
+
+    def release(self) -> None:
+        self._active = False
+
+
+_ota_lock = _OtaLock()
 
 
 @app.post("/api/system/ota/update")
 async def api_system_ota_update(_: Auth, request: Request):
-    global _ota_running
-
     body = await request.json()
     raw = body.get("services", [])
     if not isinstance(raw, list) or not raw:
@@ -1979,15 +2007,14 @@ async def api_system_ota_update(_: Auth, request: Request):
     if not Path(_OTA_WRAPPER).exists():
         raise HTTPException(status_code=503, detail="ota-update-wrapper not installed")
 
-    if _ota_running:
+    if _ota_lock.busy():
         raise HTTPException(status_code=409, detail="Update already in progress")
 
-    _ota_running = True
+    _ota_lock.acquire()
 
     svc_arg = ",".join(services)
 
     async def event_stream():
-        global _ota_running
         log_fh = None
         try:
             log_fh = open(OTA_LOG, "a", buffering=1)
@@ -2016,17 +2043,21 @@ async def api_system_ota_update(_: Auth, request: Request):
         finally:
             if log_fh:
                 log_fh.close()
-            _ota_running = False
+            _ota_lock.release()
 
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    try:
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    except Exception:
+        _ota_lock.release()
+        raise
 
 
 @app.get("/api/system/ota/log")

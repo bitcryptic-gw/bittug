@@ -1644,6 +1644,49 @@ function updateOtaConfirmBtn() {
   btn.disabled = checks.length === 0;
 }
 
+const OTA_RESTART_POLL_TIMEOUT_MS = 120000;
+const OTA_RESTART_POLL_INTERVAL_MS = 2000;
+
+// Non-zero exit, a stream that ended without a result, or an HTTP error: the
+// update did not succeed cleanly, so the button must return to "Confirm Update"
+// and the OTA log link must be surfaced. Never leave it stuck on "Updating…".
+function otaShowFailure(msg) {
+  const btn = document.getElementById('btn-ota-update');
+  const output = document.getElementById('ota-output');
+  if (output) {
+    output.classList.remove('hidden');
+    output.textContent += '\n\u2717 ' + msg;
+    output.scrollTop = output.scrollHeight;
+  }
+  const link = document.getElementById('ota-fail-log-link');
+  if (link) link.classList.remove('hidden');
+  if (btn) { btn.disabled = false; btn.textContent = 'Confirm Update'; }
+}
+
+// The stream dropped while gateway-ui.service was being updated and no result
+// arrived: almost certainly the UI restarting. Don't trust browser-specific
+// error wording — poll the API until it answers, then reload. If it never comes
+// back within the timeout, reset the button and explain.
+async function otaWaitForRestartAndReload() {
+  const reloadMsg = document.getElementById('ota-reload-msg');
+  if (reloadMsg) reloadMsg.classList.remove('hidden');
+  const deadline = Date.now() + OTA_RESTART_POLL_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await new Promise(res => setTimeout(res, OTA_RESTART_POLL_INTERVAL_MS));
+    try {
+      const r = await fetch('/api/identity', {
+        headers: { Authorization: `Bearer ${state.token}` },
+      });
+      if (r.ok) { location.reload(); return; }
+    } catch {
+      // Still restarting — keep polling.
+    }
+  }
+  if (reloadMsg) reloadMsg.classList.add('hidden');
+  otaShowFailure('lost the connection while gateway-ui was restarting and it did not come back within ' +
+    (OTA_RESTART_POLL_TIMEOUT_MS / 1000) + 's. The update may still be running — check the OTA log, then reload the page.');
+}
+
 async function runOtaUpdate() {
   const checks = document.querySelectorAll('.ota-svc-check:checked');
   let services;
@@ -1654,32 +1697,40 @@ async function runOtaUpdate() {
   } else {
     return;
   }
+  const uiUpdating = services.some(s => s === 'gateway-ui.service');
   const btn = document.getElementById('btn-ota-update');
   const output = document.getElementById('ota-output');
+  const reloadMsg = document.getElementById('ota-reload-msg');
+  const failLink = document.getElementById('ota-fail-log-link');
   btn.disabled = true;
   btn.textContent = 'Updating…';
   output.classList.remove('hidden');
   output.textContent = '';
+  if (reloadMsg) reloadMsg.classList.add('hidden');
+  if (failLink) failLink.classList.add('hidden');
+
+  let exitCode = null;
+  let newVersion = null;
   try {
     const r = await fetch('/api/system/ota/update', {
       method: 'POST',
       headers: { Authorization: `Bearer ${state.token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ services }),
     });
-    if (r.status === 409) { output.textContent = 'Update already in progress.'; return; }
-    if (r.status === 503) { const err = await r.json(); output.textContent = 'Error: ' + err.detail; return; }
+    if (r.status === 409) { otaShowFailure('Update already in progress.'); return; }
+    if (r.status === 503) {
+      let detail = 'Update service unavailable.';
+      try { detail = (await r.json()).detail || detail; } catch {}
+      otaShowFailure(detail); return;
+    }
     if (!r.ok) {
       let detail = 'Request failed';
       try { detail = (await r.json()).detail || detail; } catch {}
-      output.textContent = 'Error: ' + detail; return;
+      otaShowFailure(detail); return;
     }
     const reader = r.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';
-    let exitCode = null;
-    let newVersion = null;
-    const reloadMsg = document.getElementById('ota-reload-msg');
-    const countdown = document.getElementById('ota-countdown');
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -1707,46 +1758,45 @@ async function runOtaUpdate() {
         if (exitCode !== null) break;
       }
     }
+
     if (exitCode === 0) {
-      if (services.some(s => s === 'gateway-ui.service')) {
+      if (uiUpdating) {
         // UI is restarting — show countdown
-        reloadMsg.classList.remove('hidden');
+        const countdown = document.getElementById('ota-countdown');
+        if (reloadMsg) reloadMsg.classList.remove('hidden');
         let sec = 5;
-        countdown.textContent = sec;
+        if (countdown) countdown.textContent = sec;
         state.otaCountdown = setInterval(() => {
           sec--;
-          countdown.textContent = sec;
+          if (countdown) countdown.textContent = sec;
           if (sec <= 0) {
             clearInterval(state.otaCountdown);
             location.reload();
           }
         }, 1000);
-      } else {
-        output.textContent += '\n✓ Update completed successfully' + (newVersion ? ' (' + newVersion + ')' : '');
+        return;
       }
-    } else if (exitCode !== null) {
-      output.textContent += '\n✗ Update failed (exit ' + exitCode + ')';
-    }
-  } catch (e) {
-    if (e.name === 'TypeError' && e.message.includes('network')) {
-      // Connection dropped — UI restarting
-      const reloadMsg = document.getElementById('ota-reload-msg');
-      reloadMsg.classList.remove('hidden');
-      let sec = 5;
-      document.getElementById('ota-countdown').textContent = sec;
-      state.otaCountdown = setInterval(() => {
-        sec--;
-        document.getElementById('ota-countdown').textContent = sec;
-        if (sec <= 0) {
-          clearInterval(state.otaCountdown);
-          location.reload();
-        }
-      }, 1000);
-    }
-  } finally {
-    if (!services.some(s => s === 'gateway-ui.service')) {
+      output.textContent += '\n✓ Update completed successfully' + (newVersion ? ' (' + newVersion + ')' : '');
       btn.disabled = false;
       btn.textContent = 'Confirm Update';
+      return;
+    }
+
+    // Non-zero exit or a stream that ended with no result: genuine failure.
+    if (exitCode !== null) {
+      otaShowFailure('Update failed (exit ' + exitCode + '). See the OTA log for diagnostics.');
+    } else {
+      otaShowFailure('The update stream ended without a result. See the OTA log for diagnostics.');
+    }
+  } catch (e) {
+    // The connection dropped. If gateway-ui was being updated and no result
+    // arrived, treat it as the UI restarting and poll for it — independent of
+    // browser-specific error text ("Failed to fetch" vs "Load failed" vs
+    // "network error").
+    if (uiUpdating && exitCode === null) {
+      await otaWaitForRestartAndReload();
+    } else {
+      otaShowFailure('Connection lost during the update: ' + ((e && e.message) ? e.message : e) + '. See the OTA log for diagnostics.');
     }
   }
 }
@@ -2925,6 +2975,8 @@ function wireEvents() {
   document.getElementById('ota-service-checks').addEventListener('change', updateOtaConfirmBtn);
   document.getElementById('btn-ota-update').addEventListener('click', runOtaUpdate);
   document.getElementById('btn-ota-view-log').addEventListener('click', viewOtaLog);
+  const otaFailLog = document.getElementById('btn-ota-fail-log');
+  if (otaFailLog) otaFailLog.addEventListener('click', viewOtaLog);
 
   // Header update badge — click navigates to Settings tab, triggers OTA load
   document.getElementById('header-update-badge').addEventListener('click', function() {

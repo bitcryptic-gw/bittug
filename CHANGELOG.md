@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-09-30 — OTA UI: no more stuck "Updating…"; robust restart detection; lock release
+
+**Why:** `runOtaUpdate`'s `finally` only re-enabled the Confirm Update button
+when `gateway-ui.service` was **not** among the services. Web UI is ticked by
+default, so a **failed** update (non-zero exit, or a stream that ended with no
+exit code) left the button disabled on "Updating…" until a hard refresh.
+
+**What changed:**
+- **`gateway-ui/static/app.js`:** the button state is now decided by outcome.
+  Success with `gateway-ui.service` keeps the countdown/reload; success without
+  it (and every failure path) resets the button to "Confirm Update". A non-zero
+  exit, a stream that ends without a result, and 409/503/other HTTP errors all
+  show a clear failure message and **surface the OTA log** (new inline "View
+  OTA log for diagnostics" button). The catch no longer keys on the
+  browser-specific `e.message.includes('network')`: if `gateway-ui.service` was
+  being updated and the stream dropped with no result, it is treated as a
+  probable restart and the UI **polls `/api/identity` until it answers**, then
+  reloads; after a 2-minute timeout the button resets and a message explains.
+- **`gateway-ui/static/index.html`:** the inline diagnostics-log button.
+- **`gateway-ui/main.py`:** the OTA in-progress guard (source of the 409) is now
+  a small lock object released in the stream's `finally` (non-zero exit, normal
+  completion, client disconnect) **and** on any error while constructing the
+  response, with a 30-minute max-age backstop for the never-iterated-generator
+  leak case, so a retry cannot wedge on a stale 409.
+
 ## 2026-09-30 — OTA wrapper: fast-forward-only pull, deterministic git env, failure diagnostics
 
 **Why:** Perth's first OTA to `v2026.09.29` failed with git exit 128 ("Need to
