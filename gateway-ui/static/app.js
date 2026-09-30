@@ -147,8 +147,42 @@ async function loadDashboard() {
     api('/api/sysinfo'),
     api('/api/status/groups'),
   ]);
-  if (groups.status  === 'fulfilled') renderDashServices(groups.value);
+  if (groups.status  === 'fulfilled') {
+    renderDashServices(groups.value);
+    applyHeliumVisibility((groups.value.helium || {}).group_state);
+  }
   if (sysinfo.status === 'fulfilled') renderSysinfo(sysinfo.value, true);
+}
+
+// ── Helium hardware visibility (fail open) ───────────────────────────────────
+//
+// The ONLY signal that hides Helium/LoRa UI is the definitive hardware-absent
+// "not_configured" group state (the probe marker is missing). Every other
+// state — active, fault, optional, a missing field, a pending request, or a
+// request error — leaves the Helium elements visible, so a real or faulted
+// concentrator always shows its UI and diagnostics. Nothing is cached across
+// loads: each normal status poll re-evaluates this live.
+const HELIUM_ABSENT_STATE = 'not_configured';
+
+function applyHeliumVisibility(groupState) {
+  const absent = groupState === HELIUM_ABSENT_STATE;
+  const section = document.getElementById('helium-app-section');
+  if (section) section.classList.toggle('hidden', absent);
+  const note = document.getElementById('helium-optional-note');
+  if (note) note.classList.toggle('hidden', !absent);
+  const pill = document.querySelector('.log-pill[data-unit="helium"]');
+  if (pill) pill.classList.toggle('hidden', absent);
+  const ntfyRow = document.getElementById('ntfy-alert-helium-row');
+  if (ntfyRow) ntfyRow.classList.toggle('hidden', absent);
+}
+
+async function refreshHeliumHardware() {
+  try {
+    const groups = await api('/api/status/groups');
+    applyHeliumVisibility((groups.helium || {}).group_state);
+  } catch (e) {
+    // Fail open: on any error, leave the current (default: visible) state.
+  }
 }
 
 function renderDashServices(d) {
@@ -156,7 +190,11 @@ function renderDashServices(d) {
   document.querySelectorAll('#dash-services-body .service-group').forEach(el => {
     if (!el.classList.contains('collapsed')) expanded.add(el.dataset.group);
   });
-  const groupOrder = ['helium', 'wingbits', 'tailscale', 'web-ui'];
+  // Helium is optional: hide its whole group when the hardware probe says no
+  // concentrator is present. Only the definitive "not_configured" signal
+  // hides — active, fault, unknown, loading and error all show (fail open).
+  const groupOrder = ['helium', 'wingbits', 'tailscale', 'web-ui']
+    .filter(key => !(key === 'helium' && (d[key] || {}).group_state === 'not_configured'));
   const labels = { helium: 'Helium', wingbits: 'Wingbits', tailscale: 'Tailscale', 'web-ui': 'Web UI' };
   const stateClass = { active: 'status-active', fault: 'status-fault', optional: 'status-optional', not_configured: 'status-optional' };
   const stateLabel = { active: 'active', fault: 'fault', optional: 'not configured', not_configured: 'no Helium hardware detected' };
@@ -184,14 +222,16 @@ function renderDashServices(d) {
 // ── Applications: Helium + Wingbits ──────────────────────────────────────────
 
 async function loadApplications() {
-  const [identity, status, beacon, bands, wingbits] = await Promise.allSettled([
+  const [identity, status, beacon, bands, wingbits, groups] = await Promise.allSettled([
     api('/api/identity'),
     api('/api/status'),
     api('/api/beacon'),
     api('/api/bands'),
     api('/api/wingbits'),
+    api('/api/status/groups'),
   ]);
 
+  if (groups.status   === 'fulfilled') applyHeliumVisibility((groups.value.helium || {}).group_state);
   if (identity.status === 'fulfilled') renderAppIdentity(identity.value);
   if (status.status   === 'fulfilled') renderHeliumServices(status.value);
   if (beacon.status   === 'fulfilled') renderBeacon(beacon.value);
@@ -1810,7 +1850,7 @@ function startLogAutoRefresh() {
 }
 
 function getActiveLogUnits() {
-  const pills = document.querySelectorAll('.log-pill.active');
+  const pills = document.querySelectorAll('.log-pill.active:not(.hidden)');
   return Array.from(pills).map(p => p.dataset.unit).join(',');
 }
 
@@ -3030,7 +3070,7 @@ function wireEvents() {
   document.getElementById('btn-refresh-logs').addEventListener('click', loadLogs);
   document.querySelectorAll('.log-pill').forEach(pill => {
     pill.addEventListener('click', () => {
-      const activePills = document.querySelectorAll('.log-pill.active');
+      const activePills = document.querySelectorAll('.log-pill.active:not(.hidden)');
       if (activePills.length === 1 && activePills[0] === pill) return;
       pill.classList.toggle('active');
       loadLogs();
@@ -3153,6 +3193,7 @@ function wireEvents() {
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 function initApp() {
+  refreshHeliumHardware();
   const savedTab = sessionStorage.getItem('activeTab') || 'dashboard';
   switchTab(savedTab);
 }

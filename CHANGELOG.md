@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-09-30 — Helium/LoRa UI is optional: hides itself when no concentrator is present
+
+The Helium/LoRa parts of the web UI now hide automatically on a device with no
+LoRa concentrator, so a bare Raspberry Pi running only concentrator-free
+modules no longer shows empty Helium cards, a "no Helium hardware detected"
+pill, a Helium log filter, or a Helium ntfy alert. The signal is the existing
+hardware-probe result already exposed by `/api/status/groups`
+(`group_state: "not_configured"`, set when the
+`/run/gateway/helium-hardware-present` marker is absent) — no new endpoint, no
+new privileged operation, and no change to service start/stop or the
+no-hardware restart-loop protection.
+
+Behaviour is **fail open**: only the definitive `not_configured` state hides
+anything. `active`, `fault` (hardware present but a unit failed), `optional`,
+an unknown / not-yet-loaded payload, a missing field, and a status-request
+error all **show** the Helium elements, so a real or faulted concentrator always
+keeps its UI and diagnostics. The state follows the normal 30 s status poll —
+plugging in a concentrator makes the UI appear without an OTA, and removal
+hides it again; nothing is cached across loads. On the Applications tab an
+absent device instead shows one muted line: "Helium/LoRa support is optional
+and appears automatically when a LoRa concentrator is detected."
+
+Frontend-only (`app.js`, `index.html`). Backend, sudoers, wrappers and
+`sync-provisioning.sh` are untouched.
+
 ## 2026-09-30 — Anyone card layout: stop the Change button dropping onto its own line
 
 The Nickname, Contact, and Rewards wallet rows now use a stacked layout: the

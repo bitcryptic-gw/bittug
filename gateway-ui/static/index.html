@@ -69,6 +69,8 @@
     <!-- ── Applications ───────────────────────────────────────── -->
     <section id="tab-applications" class="tab-panel hidden" role="tabpanel">
 
+      <div id="helium-app-section">
+
       <h3 class="sub-section-title">Helium</h3>
 
       <div class="dashboard-grid">
@@ -113,6 +115,10 @@
         </div>
 
       </div>
+
+      </div>
+
+      <p id="helium-optional-note" class="hint hidden">Helium/LoRa support is optional and appears automatically when a LoRa concentrator is detected.</p>
 
       <h3 class="sub-section-title">Wingbits</h3>
 
@@ -731,7 +737,7 @@
             <p class="field-label">Alert notifications</p>
             <div class="ntfy-checks" id="ntfy-checks">
               <label class="ntfy-check-row"><input type="checkbox" class="ntfy-alert-check" data-key="update_available"> <span>Update available</span></label>
-              <label class="ntfy-check-row"><input type="checkbox" class="ntfy-alert-check" data-key="helium_fault"> <span>Helium offline</span></label>
+              <label class="ntfy-check-row" id="ntfy-alert-helium-row"><input type="checkbox" class="ntfy-alert-check" data-key="helium_fault"> <span>Helium offline</span></label>
               <label class="ntfy-check-row"><input type="checkbox" class="ntfy-alert-check" data-key="wingbits_fault"> <span>Wingbits offline</span></label>
               <label class="ntfy-check-row"><input type="checkbox" class="ntfy-alert-check" data-key="cpu_temp"> <span>CPU temperature</span></label>
               <label class="ntfy-check-row"><input type="checkbox" class="ntfy-alert-check" data-key="ram"> <span>RAM usage</span></label>
