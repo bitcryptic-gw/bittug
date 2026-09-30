@@ -2,30 +2,50 @@
 
 > **Formerly known as *sensecap-m1-gateway / SenseCap M1 Gateway*.** See [CHANGELOG.md](CHANGELOG.md) for the rename history.
 
-An open-source, hardware-agnostic DePIN gateway platform for Raspberry Pi. The base platform is just the Pi plus this software stack — from there you choose which DePIN network module(s) to run. **Helium (LoRaWAN)** is the original and most mature module, requiring a Helium-class concentrator attached to the Pi. Alongside it, BitTug also runs **Honeygain, URnetwork, Myst, and Anyone Protocol** — all of which need nothing beyond the Pi itself, no concentrator or LoRa hardware of any kind.
+BitTug is an open-source, **hardware-agnostic DePIN gateway for Raspberry Pi**. Flash a Pi, pick
+which DePIN network module(s) to run, and go — **nothing beyond the Pi and a network
+connection is required** for the modules that need no extra hardware: **Honeygain,
+URnetwork, Mysterium, and Anyone Protocol**.
 
-Originally built as a replacement firmware for the **Seeed SenseCap M1** LoRaWAN gateway, the platform has since proven out on bare Raspberry Pi 3B/4 hardware with no SenseCap board and no concentrator attached at all — which is what drove the shift to a modular, hardware-agnostic design.
+**Helium / LoRaWAN is one optional module among several, not the product's identity.** It is
+the original and most mature module and needs a LoRa concentrator board attached to the Pi;
+if you don't have one you simply don't run it, and the rest of BitTug works unchanged.
+MastChain (AIS) and Wingbits (ADS-B) are likewise optional and need an RTL-SDR dongle.
+See [Modules](#modules) for the full list and what each one needs.
+
+Originally built as a replacement firmware for the **Seeed SenseCap M1** LoRaWAN gateway, the
+platform has since proven out on bare Raspberry Pi 3B/4 hardware with no SenseCap board and
+no concentrator attached at all — which is what drove the shift to a modular,
+hardware-agnostic design.
 
 No hidden services. No telemetry. No third-party backdoors. Fully auditable.
 
 ---
 
-## What This Is
+## Modules
 
-BitTug is a Raspberry Pi platform for running DePIN network modules, with a clean, minimal, fully open-source stack. Pick the module(s) that match the hardware you have:
+Pick the module(s) that match the hardware you have. Each runs independently — the DePIN
+modules as their own Docker-based systemd services, the Helium stack as native systemd
+services. Full descriptions follow in the sections below.
 
-**Concentrator-free modules** (just the Pi — no additional hardware):
-- **Honeygain**, **URnetwork**, **Myst**, **Anyone Protocol** — bandwidth/network-sharing DePIN networks, each running as its own systemd unit
+| Module | What it is | Extra hardware | Network |
+|---|---|---|---|
+| **Honeygain** | Bandwidth-sharing network | none — bare Pi | outbound only |
+| **URnetwork** | Community bandwidth provider | none — bare Pi | outbound only |
+| **Mysterium** | Mysterium Network node | none — bare Pi | publishes TCP `4449` (node API / dashboard) |
+| **Anyone Protocol** | Tor relay (non-exit) | none — bare Pi | publishes TCP `9001` (ORPort) + TCP `9030` (DirPort) |
+| **MastChain** | AIS ship-tracking (AIS-catcher) | RTL-SDR-class USB dongle (AIS ≈162 MHz) | outbound to `api.mastchain.io` |
+| **Wingbits** | ADS-B aircraft tracking | RTL-SDR-class USB dongle (ADS-B 1090 MHz) | outbound; `readsb`↔`wingbits` on localhost |
+| **Helium / LoRaWAN** | Helium IoT gateway | LoRa concentrator (SX1302) + ATECC608A secure element | outbound to Helium; EUI derived from `eth0` |
 
-**Helium LoRaWAN module** (Pi + Helium-class concentrator):
-- **Semtech `lora_pkt_fwd`** — the reference packet forwarder for the SX1302 concentrator
-- **Helium `gateway-rs`** — lightweight Helium network gateway daemon
-- **ATECC608A** — on-board secure element for swarm key storage (no software key files)
+**One dongle = one spectrum:** MastChain (≈162 MHz) and Wingbits (1090 MHz) cannot share a
+single RTL-SDR, and a dongle can only be opened by one process at a time — running both on
+one device requires **two dongles**. The web UI surfaces this warning when a single-dongle
+conflict is detected.
 
-**Shared across all modules:**
-- **Tailscale** — optional remote access, managed via the web UI using your own auth key, no config file required
-
-The goal is a gateway you can fully understand, audit, and trust — running on hardware you already own, with LoRa/Helium available as one option among several rather than a prerequisite.
+**Tailscale** is an optional, shared remote-access layer that works alongside any module and
+runs through the web UI using your own auth key — no config file required. See
+[Tailscale](#tailscale).
 
 ---
 
@@ -37,28 +57,48 @@ The goal is a gateway you can fully understand, audit, and trust — running on 
 
 ---
 
-## Hardware Requirements
+## Supported Hardware & OS
 
-The only hardware BitTug actually requires is a Raspberry Pi. Everything past that is module-dependent.
+The only hardware BitTug actually requires is a Raspberry Pi; everything past that is
+module-dependent (see the [Modules](#modules) table).
 
-| You want to run… | Hardware needed |
+| | Detail |
 |---|---|
-| Honeygain / URnetwork / Myst / Anyone Protocol | Raspberry Pi 3B / 4 / 5 — nothing else |
-| Helium LoRaWAN | The above, **plus** any Helium-class (SX1302) concentrator (originally RAK2287 / SX1302 SPI) |
+| **SBC** | Raspberry Pi 3B / 4 / 5, 64-bit |
+| **OS** | Raspberry Pi OS Lite 64-bit (ARM64 / Debian Trixie). The image builder tracks the latest `raspios_lite_arm64` release. |
+| **Proven on** | Bare Raspberry Pi 3B and Pi 4, with no concentrator or SenseCap board attached |
+| **Helium / LoRaWAN module** | Raspberry Pi 4B path (verified on the SenseCap M1). The concentrator reset (`scripts/reset_lgw.sh`) is hardcoded to the Pi 4B sysfs GPIO layout and is explicitly **not Pi 5** |
 
-If you're running the Helium module, it additionally needs:
+Other Helium-class hardware using the same RAK2287/SX1302 concentrator — e.g. Bobcat and
+similar miners — should work but is not yet tested. If you run BitTug on other hardware, a
+report or PR is welcome.
+
+The split is modular: the web UI, `gateway-rs`, and the Wingbits stack are Pi-portable and
+hardware-independent, while `lora_pkt_fwd` and `reset_lgw.sh` are specific to the attached
+concentrator and only load if you're running the Helium module.
+
+---
+
+## Helium / LoRaWAN Module (Optional)
+
+Helium is the original and most mature BitTug module, and it is entirely optional. It needs a
+LoRa concentrator board attached to the Pi. The module is what the Helium-facing documentation
+later in this README — [Band / Region Selection](#band--region-selection), the
+[How It Works](#how-it-works) diagram, and [Building from Source](#building-from-source) —
+refers to; skip those if you only run the concentrator-free modules.
 
 | Component | Detail |
 |-----------|--------|
-| SBC | Raspberry Pi 3B / 4 / 5 (originally the Pi 4B inside SenseCap M1) |
-| Concentrator | Any Helium-class concentrator (originally RAK2287 / SX1302 SPI) |
-| Secure Element | Microchip ATECC608A on I2C-1 (0x60) |
-| Connectivity | Ethernet (eth0) for Gateway EUI derivation |
+| SBC | Raspberry Pi 4B path (verified on the Pi 4B inside the SenseCap M1) |
+| Concentrator | Helium-class concentrator (originally RAK2287 / SX1302 over SPI `/dev/spidev0.0`) |
+| Secure Element | Microchip ATECC608A on I2C-1 (`0x60`) — hardware swarm key storage, no software key files |
+| Connectivity | Outbound internet; Gateway EUI derived from `eth0` |
 | GPS | None — fake GPS configured in the web UI or `config/` |
 
-**Verified to work on the SenseCap M1.** Other Helium-class hardware using the same RAK2287/SX1302 concentrator — e.g. Bobcat and similar miners — should work but is not yet tested. If you run BitTug on other hardware, a report or PR is welcome.
-
-The split is modular: the web UI, gateway-rs, and Wingbits stack are Pi-portable and hardware-independent, while `lora_pkt_fwd` and `reset_lgw.sh` are specific to the attached concentrator and only load if you're running the Helium module.
+The module consists of Semtech **`lora_pkt_fwd`** (reference packet forwarder for the SX1302
+concentrator) and Helium **`gateway-rs`** (lightweight network gateway daemon). On a device
+with no concentrator both are automatically skipped — no crash-looping — and the Helium parts
+of the web UI hide themselves until a concentrator is detected.
 
 ---
 
@@ -104,10 +144,10 @@ sudo cat /etc/gateway-ui/token
 
 | Tab | What it shows |
 |-----|---------------|
-| **Dashboard** | Grouped service status (Helium / Wingbits / Tailscale / Web UI), system metrics (CPU / memory / disk) |
-| **Applications** | Helium: gateway identity, beacon stats, LoRa region (only relevant if you're running the Helium module). Wingbits: status and in-browser setup/reconfiguration flow |
+| **Dashboard** | Grouped service status (Wingbits / Tailscale / Web UI, plus Helium when a concentrator is detected), system metrics (CPU / memory / disk) |
+| **Applications** | Helium: gateway identity, beacon stats, LoRa region — these appear only when a concentrator is detected, otherwise a one-line note explains that Helium is optional. Wingbits: status and in-browser setup/reconfiguration flow |
 | **Network** | Interface cards (eth0 / wlan0 / Tailscale), Tailscale auth + options (subnet routing, SSH toggle), web UI port |
-| **Live Log** | Unified journal stream with filter pills: System / Helium / Wingbits / Tailscale |
+| **Live Log** | Unified journal stream with filter pills: System / Wingbits / Tailscale, plus Helium when a concentrator is detected |
 | **Settings** | OTA updates (version check, changelog, smart service restart, SSE stream), bearer token display and regenerate |
 
 The header bar shows the current build version alongside the brand (`BitTug vYYYY.MM.DD`). An amber **⬆ Update available** badge appears when a newer GitHub release is detected; clicking navigates to the Settings OTA section.
@@ -146,7 +186,7 @@ Band is configured from the **Applications** tab in the web UI. To change band a
 
 ## How It Works
 
-*(This diagram shows the Helium LoRaWAN module's data path. The concentrator-free modules — Honeygain, URnetwork, Myst, Anyone Protocol — run independently as their own systemd services and don't touch this path at all.)*
+*(This diagram shows the Helium LoRaWAN module's data path. The concentrator-free modules — Honeygain, URnetwork, Mysterium, Anyone Protocol — run independently as their own systemd services and don't touch this path at all.)*
 
 ```
 LoRa devices (nodes)
@@ -246,7 +286,7 @@ Unlike MastChain's own installer (which bakes your email and token into a world-
 
 ## Building from Source
 
-*(This section covers building the Helium LoRaWAN module. If you're only running the concentrator-free modules — Honeygain, URnetwork, Myst, Anyone Protocol — you don't need any of this.)*
+*(This section covers building the Helium LoRaWAN module. If you're only running the concentrator-free modules — Honeygain, URnetwork, Mysterium, Anyone Protocol — you don't need any of this.)*
 
 The steps below are for the SX1302-family concentrator (e.g. RAK2287), which is the currently tested and documented path. If you're building for a different Helium-class concentrator chipset, the packet-forwarder build process will differ — see the upstream hardware vendor's documentation for the appropriate packet forwarder repository.
 
@@ -282,6 +322,7 @@ sudo ln -sf /opt/gateway/scripts/reset_lgw.sh /opt/gateway/pktfwd/reset_lgw.sh
 ├── boot/
 │   ├── bootstrap.sh        # First-time provisioning (run by firstrun.sh on first boot)
 │   ├── firstrun.sh         # Injected into image — clones repo and calls bootstrap.sh
+│   ├── gateway-provisioning-check.sh
 │   ├── config.txt          # Pi boot config
 │   ├── build-image.sh      # GitHub Actions image build script
 │   └── tag-release.sh      # Mac-side release tagging helper
@@ -312,8 +353,11 @@ sudo ln -sf /opt/gateway/scripts/reset_lgw.sh /opt/gateway/pktfwd/reset_lgw.sh
     ├── pktfwd.service
     ├── gateway-rs.service
     ├── gateway-ui.service
-    ├── readsb.service
-    └── wingbits.service
+    ├── depin-*.service          # Honeygain / URnetwork / Mysterium / Anyone / MastChain
+    ├── depin-update-check.{service,timer}
+    ├── tailscale-autoconnect.{service,timer}
+    ├── tailscale-reauth-watchdog.service
+    └── readsb-override.conf     # drop-in for readsb.service (readsb itself is installed by the Wingbits installer)
 
 /etc/gateway-ui/token       # Bearer token (owner: gateway-ui, mode 600)
 /etc/gateway-version        # Build version stamp (written by bootstrap.sh)

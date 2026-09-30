@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-09-30 — README: LoRa/Helium framed as one optional module; accurate module/hardware table
+
+Reworked the README so the first screen tells a new reader what BitTug is — a
+hardware-agnostic DePIN gateway for Raspberry Pi — and that **nothing beyond the
+Pi and a network connection** is needed for the modules that need no extra
+hardware (Honeygain, URnetwork, Mysterium, Anyone Protocol). Helium/LoRaWAN is
+presented as one optional module among several rather than the product's
+identity.
+
+- Added a **Modules** table (module → what it is → extra hardware → network) and
+  a **Supported Hardware & OS** section. Every row traces to the repo:
+  Honeygain/URnetwork/Mysterium/Anyone need no extra hardware; published ports
+  come from `systemd/depin-*.service` (Mysterium TCP 4449; Anyone TCP 9001
+  ORPort + TCP 9030 DirPort, anonrc `ORPort 9001`); MastChain/Wingbits need an
+  RTL-SDR (`mastchain-hardware-check.sh`, `99-rtlsdr.rules`); Helium needs an
+  SX1302 concentrator + ATECC608A.
+- Corrected the blanket `Pi 3B/4/5` Helium claim: `scripts/reset_lgw.sh`
+  resets the concentrator over the Pi 4B sysfs GPIO layout and is explicitly
+  **not Pi 5**, so the Helium module is documented as the Pi 4B path. The base
+  platform remains Pi 3B / 4 / 5 (64-bit), proven on 3B and 4.
+- Stated the OS accurately: Raspberry Pi OS Lite 64-bit (ARM64 / Debian
+  Trixie), tracking the latest `raspios_lite_arm64` release (`boot/build-image.sh`,
+  `boot/bootstrap.sh`).
+- Moved concentrator-specific hardware detail into a new "Helium / LoRaWAN
+  Module (Optional)" section; kept the one-dongle-one-spectrum note.
+- Fixed the Directory Layout: `readsb.service`/`wingbits.service` are installed
+  by the Wingbits installer, not shipped in the repo (the repo owns
+  `readsb-override.conf`); listed the actual `depin-*`/`tailscale-*` units and
+  `boot/gateway-provisioning-check.sh`.
+- Documented the new UI behaviour: Helium elements and the Helium log pill
+  appear only when a concentrator is detected.
+- Normalised "Myst" to "Mysterium" to match the UI label.
+
+**Not changed:** no code/functional changes; no repo or GitHub settings renamed.
+The `sensecap-m1-gateway` reference in the README intro is kept as the historical
+rename note, and the `sensecap` default account/hostname references are current
+on-device behaviour and unchanged.
+
 ## 2026-09-30 — Helium/LoRa UI is optional: hides itself when no concentrator is present
 
 The Helium/LoRa parts of the web UI now hide automatically on a device with no
