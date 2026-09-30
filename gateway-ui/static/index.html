@@ -308,15 +308,19 @@
             </div>
           </div>
           <div class="card-body anyone-identity-body hidden" data-project="anyone">
-            <div class="anyone-id-row">
-              <span class="field-label">Nickname</span>
+            <div class="anyone-id-row anyone-id-row--stack">
+              <div class="anyone-id-head">
+                <span class="field-label">Nickname</span>
+                <button class="btn btn-sm" id="btn-any-edit-toggle" type="button">Change</button>
+              </div>
               <span class="anyone-id-value" id="any-nickname-display">—</span>
-              <button class="btn btn-sm" id="btn-any-edit-toggle" type="button">Change</button>
             </div>
-            <div class="anyone-id-row mt">
-              <span class="field-label">Contact</span>
+            <div class="anyone-id-row anyone-id-row--stack mt">
+              <div class="anyone-id-head">
+                <span class="field-label">Contact</span>
+                <button class="btn btn-sm" id="btn-any-edit-contact-toggle" type="button">Change</button>
+              </div>
               <span class="anyone-id-value" id="any-contact-display">—</span>
-              <button class="btn btn-sm" id="btn-any-edit-contact-toggle" type="button">Change</button>
             </div>
             <div class="anyone-edit-form hidden mt" id="any-edit-form">
               <p class="anyone-edit-heading">Edit nickname &amp; contact</p>
@@ -341,10 +345,12 @@
               <code class="anyone-fpr" id="any-fingerprint">—</code>
               <button class="btn btn-sm" id="btn-any-copy-fpr" type="button" disabled>Copy</button>
             </div>
-            <div class="anyone-id-row mt hidden" id="any-wallet-row">
-              <span class="field-label">Rewards wallet</span>
+            <div class="anyone-id-row anyone-id-row--stack mt hidden" id="any-wallet-row">
+              <div class="anyone-id-head">
+                <span class="field-label">Rewards wallet</span>
+                <button class="btn btn-sm" id="btn-any-wallet-toggle" type="button">Add wallet</button>
+              </div>
               <code class="anyone-fpr" id="any-wallet">—</code>
-              <button class="btn btn-sm" id="btn-any-wallet-toggle" type="button">Add wallet</button>
             </div>
             <div class="hint hidden" id="any-fpr-note"></div>
           </div>

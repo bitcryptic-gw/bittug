@@ -1019,9 +1019,39 @@ code.addr {
   margin: 0;
 }
 
+/* Stacked rows (Nickname / Contact / Rewards wallet): the label and its action
+   share the first line; the value follows at full width and wraps anywhere, so
+   a long value can never push the action onto its own isolated line. */
+.anyone-id-row--stack { display: block; }
+
+.anyone-id-head {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  flex-wrap: wrap;
+}
+
+/* After the generic rule above (same specificity, later wins): the stacked
+   head does not reserve the 5.5rem label column. */
+.anyone-id-head .field-label {
+  min-width: 0;
+  margin: 0;
+}
+
+.anyone-id-head .btn { flex: 0 0 auto; }
+
 .anyone-id-value {
   font-size: .9rem;
   color: var(--text);
+}
+
+.anyone-id-row--stack .anyone-id-value,
+.anyone-id-row--stack .anyone-fpr {
+  display: block;
+  margin-top: .3rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .anyone-fpr {
@@ -1032,6 +1062,11 @@ code.addr {
   user-select: all;
 }
 
+/* Inline Fingerprint row: allow the grouped fingerprint to shrink and wrap
+   instead of pushing the Copy button off. No grow, so Copy stays directly after
+   the value exactly as before. */
+.anyone-id-row .anyone-fpr { min-width: 0; }
+
 .anyone-edit-heading {
   font-weight: 600;
   font-size: .9rem;
@@ -1039,7 +1074,10 @@ code.addr {
   color: var(--text);
 }
 
-.anyone-rename-form .wingbits-input {
+/* Stale selector fixed: the form class was renamed `.anyone-rename-form` ->
+   `.anyone-edit-form` in the round-4 single-form change and this rule was left
+   behind, so the edit inputs no longer had the intended cap. */
+.anyone-edit-form .wingbits-input {
   max-width: 320px;
   width: 100%;
 }

@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-09-30 — Anyone card layout: stop the Change button dropping onto its own line
+
+The Nickname, Contact, and Rewards wallet rows now use a stacked layout: the
+label and its action button share the first line (`Contact  [Change]`) and the
+value follows at full width, wrapping anywhere (`min-width:0`,
+`overflow-wrap:anywhere`) so a long email+wallet can never push the button onto
+an isolated line. The action-on-first-line pattern is applied consistently to
+Nickname, Contact, and Rewards wallet. The Fingerprint row is unchanged (still
+inline; only a `min-width:0` shrink guard so it can't overflow). No behavioural
+changes. Also fixed a stale selector left by the round-4 rename —
+`.anyone-rename-form` → `.anyone-edit-form` — which had silently dropped the
+edit-input `max-width` cap.
+
 ## 2026-09-30 — Static caching: revalidate index.html so a post-OTA reload can't reuse old assets
 
 Investigated whether a page can keep running stale JavaScript after an OTA. The
