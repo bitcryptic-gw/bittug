@@ -104,6 +104,11 @@ setuid-root surface is replaced by exact-command grants.
   Honeygain routes through Docker — the other four DePIN projects already read
   journald, which works — so the five grants preserve the wrapper's exact
   allowlist parity while the only caller remains Honeygain.
+  `_run()` gained a `merge_stderr` flag used for this call: Honeygain writes to
+  its own stderr, which `docker logs` replays on **our** stderr, and the old
+  setuid wrapper explicitly merged stderr into stdout so `subprocess` (which
+  captures stdout only) saw it. Without the merge the Honeygain log view was
+  empty (observed on the first device deploy, then fixed).
 - Graceful degradation on failure is unchanged: `_run()` maps a missing binary /
   failed sudo to a negative rc, `_depin_project_status()` treats that as empty
   logs, and the card renders a neutral state — no 500, no error stack. During an

@@ -383,9 +383,17 @@ async def _run_async(cmd: list[str], timeout: int = 10) -> tuple[int, str, str]:
         return -1, "", str(exc)
 
 
-def _run(cmd: list[str], timeout: int = 10) -> tuple[int, str, str]:
+def _run(cmd: list[str], timeout: int = 10, merge_stderr: bool = False) -> tuple[int, str, str]:
+    """Run a fixed argv with no shell. When merge_stderr is set, the child's
+    stderr is folded into stdout (subprocess.STDOUT) so callers that read only
+    the returned stdout still see output the child writes on stderr — this is
+    what the old setuid depin-logs-wrapper did for `docker logs`, whose
+    container-stderr lines would otherwise be lost."""
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, shell=False)
+        r = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout, shell=False,
+            stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
+        )
         return r.returncode, r.stdout, r.stderr
     except subprocess.TimeoutExpired:
         return -1, "", "timeout"
@@ -2823,6 +2831,7 @@ def _depin_project_status(project: str) -> dict:
         log_rc, log_out, _ = _run(
             ["sudo", "-n", "/usr/bin/docker", "logs", "--tail", str(DEPIN_LOG_LINES), project],
             timeout=10,
+            merge_stderr=True,  # Honeygain logs on stderr; wrapper merged it
         )
     else:
         log_rc, log_out, _ = _run(
