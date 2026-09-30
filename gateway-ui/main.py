@@ -390,9 +390,12 @@ def _run(cmd: list[str], timeout: int = 10, merge_stderr: bool = False) -> tuple
     what the old setuid depin-logs-wrapper did for `docker logs`, whose
     container-stderr lines would otherwise be lost."""
     try:
+        # Not capture_output=True: it raises ValueError if stdout/stderr are
+        # passed alongside it, and we need an explicit stderr to merge streams.
         r = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout, shell=False,
-            stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
+            cmd, text=True, timeout=timeout, shell=False,
+            stdout=subprocess.PIPE,
+            stderr=(subprocess.STDOUT if merge_stderr else subprocess.PIPE),
         )
         return r.returncode, r.stdout, r.stderr
     except subprocess.TimeoutExpired:

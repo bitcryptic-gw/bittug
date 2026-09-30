@@ -108,7 +108,11 @@ setuid-root surface is replaced by exact-command grants.
   its own stderr, which `docker logs` replays on **our** stderr, and the old
   setuid wrapper explicitly merged stderr into stdout so `subprocess` (which
   captures stdout only) saw it. Without the merge the Honeygain log view was
-  empty (observed on the first device deploy, then fixed).
+  empty (observed on the first device deploy, then fixed). The implementation
+  uses explicit `stdout`/`stderr` PIPEs, **not** `capture_output=True`, which on
+  this Python raises `ValueError` when `stderr` is also passed — an initial
+  version of this change used both and broke every subprocess call in the UI
+  until it was caught on the device.
 - Graceful degradation on failure is unchanged: `_run()` maps a missing binary /
   failed sudo to a negative rc, `_depin_project_status()` treats that as empty
   logs, and the card renders a neutral state — no 500, no error stack. During an
