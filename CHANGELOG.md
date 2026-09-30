@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026-09-30 — DePIN logs: exact-command sudoers instead of the setuid `depin-logs-wrapper`
+
+**Why:** `depin-logs-wrapper` was a setuid-root binary that exec'd `docker logs
+--tail 50 <project>` over a hardcoded five-name allowlist, purely so gateway-ui
+(unprivileged) could read Honeygain's Docker json-file logs. Same finding as the
+Anyone fingerprint read: there is no technical blocker to sudoers, so the
+setuid-root surface is replaced by exact-command grants.
+
+**What changed:**
+- **Deleted `scripts/depin-logs-wrapper.c`.** `install-wrappers.sh` builds from
+  a `*-wrapper.c` glob, so it simply stops building it.
+- **`scripts/sync-provisioning.sh`:** the existing atomic sudoers write
+  (temp file → `visudo -c -f` → `mv`, mode 0440 root:root) gains **five exact
+  lines, one per container, no wildcards** — the one-to-one mapping of the old
+  wrapper's allowlist:
+  - `gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker logs --tail 50 honeygain`
+  - `... /usr/bin/docker logs --tail 50 urnetwork`
+  - `... /usr/bin/docker logs --tail 50 myst`
+  - `... /usr/bin/docker logs --tail 50 anyone`
+  - `... /usr/bin/docker logs --tail 50 mastchain`
+  The orphan cleanup block now also idempotently removes the orphaned
+  `/usr/local/bin/depin-logs-wrapper` on every run (alongside the Anyone
+  fingerprint orphan).
+- **`gateway-ui/main.py`:** Honeygain's log read now runs the fixed argv
+  `sudo -n /usr/bin/docker logs --tail 50 honeygain` (no shell); `--tail 50` is
+  the constant `DEPIN_LOG_LINES`, kept in sync with the sudoers lines. Only
+  Honeygain routes through Docker — the other four DePIN projects already read
+  journald, which works — so the five grants preserve the wrapper's exact
+  allowlist parity while the only caller remains Honeygain.
+- Graceful degradation on failure is unchanged: `_run()` maps a missing binary /
+  failed sudo to a negative rc, `_depin_project_status()` treats that as empty
+  logs, and the card renders a neutral state — no 500, no error stack. During an
+  OTA the old `main.py` keeps running until `gateway-ui` restarts, so there is a
+  brief window where it calls the just-deleted wrapper; it degrades to the same
+  neutral log view.
+
 ## 2026-09-30 — Anyone: post-enable nickname+contact edit; wallet-format evidence; restart-keyed fingerprint cache
 
 **Item 1 — edit ContactInfo after first enable.** The configured Anyone card's

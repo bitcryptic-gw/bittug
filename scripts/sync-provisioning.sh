@@ -87,6 +87,17 @@ gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker run --rm -v /var/lib/gateway-ui/
 # on the docker pull grants above is escaped; this path has no `:`, so the
 # only metacharacter is the fixed `/var/lib/anon/fingerprint`.
 gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker exec anyone cat /var/lib/anon/fingerprint
+# DePIN log reads (Honeygain's output goes to Docker's json-file log driver,
+# not journald). One exact line per container name — no wildcard, no globbing.
+# Sudo matches the arguments exactly, so `--tail 50` is a constant that must
+# stay in sync with DEPIN_LOG_LINES in gateway-ui/main.py. This replaces the
+# setuid depin-logs-wrapper binary (removed below); the binary's hardcoded
+# allowlist maps one-to-one onto these five lines.
+gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker logs --tail 50 honeygain
+gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker logs --tail 50 urnetwork
+gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker logs --tail 50 myst
+gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker logs --tail 50 anyone
+gateway-ui ALL=(root) NOPASSWD: /usr/bin/docker logs --tail 50 mastchain
 SUDOERS
 chmod 0440 "$SUDOERS_TMP"
 if visudo -c -f "$SUDOERS_TMP"; then
@@ -97,18 +108,22 @@ else
     rm -f "$SUDOERS_TMP"
 fi
 
-# --- Orphaned Anyone fingerprint setuid wrapper cleanup (2026-09-30) ---
-# The Anyone fingerprint read moved from a setuid wrapper to the exact-command
-# sudoers grant above. Remove the old binary so no setuid-root executable is
-# left behind on devices provisioned by the earlier build. Idempotent.
-ORPHAN="/usr/local/bin/depin-anyone-fingerprint-wrapper"
-if [ -e "$ORPHAN" ]; then
-    rm -f "$ORPHAN" && \
-        log "Removed orphaned setuid wrapper ${ORPHAN}" || \
-        log "WARNING: Failed to remove orphaned wrapper ${ORPHAN}"
-else
-    log "No orphaned Anyone fingerprint wrapper present"
-fi
+# --- Orphaned setuid wrapper cleanup ---
+# The Anyone fingerprint read (2026-09-30) and the DePIN log reads (2026-09-30,
+# this round) each moved from a setuid wrapper to exact-command sudoers grants
+# above. Remove the old binaries so no setuid-root executable is left behind on
+# devices provisioned by an earlier build. Idempotent: safe to re-run.
+for ORPHAN in \
+    /usr/local/bin/depin-anyone-fingerprint-wrapper \
+    /usr/local/bin/depin-logs-wrapper; do
+    if [ -e "$ORPHAN" ]; then
+        rm -f "$ORPHAN" && \
+            log "Removed orphaned setuid wrapper ${ORPHAN}" || \
+            log "WARNING: Failed to remove orphaned wrapper ${ORPHAN}"
+    else
+        log "No orphaned wrapper present at ${ORPHAN}"
+    fi
+done
 
 # --- gateway-rs settings.toml ---
 # Sync updated config to /etc/helium_gateway/ on already-provisioned devices.

@@ -2786,9 +2786,11 @@ def _depin_project_status(project: str) -> dict:
     if project == "honeygain":
         # Honeygain's output goes through Docker's json-file log driver, not
         # journald — the unit journal is permanently empty. Read docker logs
-        # via the setuid depin-logs-wrapper (gateway-ui has no docker access).
+        # via the exact-command sudoers grant (gateway-ui has no docker access).
+        # Fixed argv, no shell; the grant matches `docker logs --tail 50
+        # honeygain` exactly, so the line count is a constant (DEPIN_LOG_LINES).
         log_rc, log_out, _ = _run(
-            ["/usr/local/bin/depin-logs-wrapper", project],
+            ["sudo", "-n", "/usr/bin/docker", "logs", "--tail", str(DEPIN_LOG_LINES), project],
             timeout=10,
         )
     else:
