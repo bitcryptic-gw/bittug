@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-09-30 — Anyone card: make the Change form discoverable for Contact; inline Add wallet
+
+**Why:** only the Nickname row had a Change button and opening the form focused
+the Nickname field, so the control read as nickname-only and the Contact field
+(where the reward wallet goes) was easy to miss.
+
+**What changed (frontend only: `index.html`, `app.js`, `style.css`):**
+- A second **Change** button beside **Contact** opens the *same* single form.
+  Opening from Contact focuses the contact field with the **caret at the end**
+  (not select-all, so an existing email is not overwritten); opening from
+  Nickname keeps the original focus+select. Both buttons stay in sync (both
+  read "Cancel" while open) and Cancel resets both to "Change".
+- The form has a clear heading **"Edit nickname & contact"**.
+- The **Rewards wallet** row now always renders ("—" when empty) and, when the
+  contact has no wallet token, shows a small inline **Add wallet** action. It
+  opens the form focused on Contact and appends ` @anon: ` (only when no
+  `@anon:` token is present), caret at the end. It never submits — the user
+  still clicks "Save changes". The advisory warning and helper text are
+  unchanged, as are validation, the save payload, the restart, and the shared
+  `anyoneContactFieldHTML` template.
+- Escape cancels the form; Enter still saves.
+
 ## 2026-09-30 — OTA UI: no more stuck "Updating…"; robust restart detection; lock release
 
 **Why:** `runOtaUpdate`'s `finally` only re-enabled the Confirm Update button

@@ -1027,6 +1027,13 @@ code.addr {
   user-select: all;
 }
 
+.anyone-edit-heading {
+  font-weight: 600;
+  font-size: .9rem;
+  margin: 0 0 .6rem 0;
+  color: var(--text);
+}
+
 .anyone-rename-form .wingbits-input {
   max-width: 320px;
   width: 100%;

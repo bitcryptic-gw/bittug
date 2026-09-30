@@ -2416,14 +2416,14 @@ function renderAnyoneIdentity(s) {
   // well-formed wallet token.
   const walletRow = document.getElementById('any-wallet-row');
   const walletEl = document.getElementById('any-wallet');
+  const addWalletBtn = document.getElementById('btn-any-add-wallet');
   if (walletRow && walletEl) {
     const wallet = parseAnyoneWallet(d.anyone_contact);
-    if (wallet) {
-      walletEl.textContent = wallet;
-      walletRow.classList.remove('hidden');
-    } else {
-      walletRow.classList.add('hidden');
-    }
+    // Always show the row ("Rewards wallet —" when empty) and offer the inline
+    // Add wallet action only when there is no wallet token in the contact.
+    walletEl.textContent = wallet || '—';
+    walletRow.classList.remove('hidden');
+    if (addWalletBtn) addWalletBtn.classList.toggle('hidden', !!wallet);
   }
 
   // Keep the edit inputs in sync with configured values, but never clobber an
@@ -2462,10 +2462,13 @@ function groupFingerprint(fpr) {
 
 // Toggle/prefill/cancel for the single post-enable edit form (nickname +
 // contact together), so an edit that changes both results in ONE configure
-// call and therefore ONE relay restart.
-function anyoneEditToggle() {
+// call and therefore ONE relay restart. Only one form exists: either Change
+// button opens or closes it. `focus` selects where the caret lands when opening
+// — 'contact' focuses the contact field with the caret at the end (so an
+// existing email is not select-all-overwritten by accident); anything else
+// keeps the original nickname focus+select.
+function anyoneEditToggle(focus) {
   const form = document.getElementById('any-edit-form');
-  const toggle = document.getElementById('btn-any-edit-toggle');
   if (!form) return;
   if (form.classList.contains('hidden')) {
     const s = (depinState.projects && depinState.projects.anyone) || {};
@@ -2475,18 +2478,56 @@ function anyoneEditToggle() {
     if (contactInput) contactInput.value = s.anyone_contact || '';
     anyContactWalletCheck(contactInput, document.getElementById('any-edit-contact-wallet-warn'));
     form.classList.remove('hidden');
-    if (toggle) toggle.textContent = 'Cancel';
-    if (nickInput) { nickInput.focus(); nickInput.select(); }
+    _anyoneEditSetToggles(true);
+    if (focus === 'contact') {
+      _anyoneEditFocusContact(contactInput);
+    } else if (nickInput) {
+      nickInput.focus();
+      nickInput.select();
+    }
   } else {
     anyoneEditCancel();
   }
 }
 
+function _anyoneEditFocusContact(contactInput) {
+  if (!contactInput) return;
+  contactInput.focus();
+  const v = contactInput.value || '';
+  contactInput.setSelectionRange(v.length, v.length);
+}
+
+// Keep both Change buttons in sync — only one form exists, so both read
+// "Cancel" while it is open and "Change" otherwise.
+function _anyoneEditSetToggles(open) {
+  const label = open ? 'Cancel' : 'Change';
+  ['btn-any-edit-toggle', 'btn-any-edit-contact-toggle'].forEach(id => {
+    const btn = document.getElementById(id);
+    if (btn) btn.textContent = label;
+  });
+}
+
+// Inline "Add wallet": opens the shared form focused on Contact and appends the
+// "@anon: " reward-wallet prefix, but only when the contact has no @anon: token
+// already. Never submits — the user still clicks "Save changes".
+function anyoneAddWallet() {
+  const form = document.getElementById('any-edit-form');
+  const contactInput = document.getElementById('any-edit-contact');
+  if (form && form.classList.contains('hidden')) anyoneEditToggle('contact');
+  if (!contactInput) return;
+  const val = contactInput.value || '';
+  if (!/@anon:/i.test(val)) {
+    const sep = (val.length > 0 && !/\s$/.test(val)) ? ' ' : '';
+    contactInput.value = val + sep + '@anon: ';
+  }
+  _anyoneEditFocusContact(contactInput);
+  anyContactWalletCheck(contactInput, document.getElementById('any-edit-contact-wallet-warn'));
+}
+
 function anyoneEditCancel() {
   const form = document.getElementById('any-edit-form');
-  const toggle = document.getElementById('btn-any-edit-toggle');
   if (form) form.classList.add('hidden');
-  if (toggle) toggle.textContent = 'Change';
+  _anyoneEditSetToggles(false);
   depinState.anyoneSaving = false;
 }
 
@@ -3047,7 +3088,11 @@ function wireEvents() {
   // DePIN — Anyone relay identity: shared contact field, edit form, copy.
   initAnyoneForms();
   const anyEditToggle = document.getElementById('btn-any-edit-toggle');
-  if (anyEditToggle) anyEditToggle.addEventListener('click', anyoneEditToggle);
+  if (anyEditToggle) anyEditToggle.addEventListener('click', () => anyoneEditToggle('nickname'));
+  const anyContactToggle = document.getElementById('btn-any-edit-contact-toggle');
+  if (anyContactToggle) anyContactToggle.addEventListener('click', () => anyoneEditToggle('contact'));
+  const anyAddWallet = document.getElementById('btn-any-add-wallet');
+  if (anyAddWallet) anyAddWallet.addEventListener('click', anyoneAddWallet);
   const anyEditSave = document.getElementById('btn-any-edit-save');
   if (anyEditSave) anyEditSave.addEventListener('click', anyoneEditSave);
   const anyEditCancel = document.getElementById('any-edit-cancel');
@@ -3056,6 +3101,7 @@ function wireEvents() {
     const el = document.getElementById(id);
     if (el) el.addEventListener('keydown', e => {
       if (e.key === 'Enter') { e.preventDefault(); anyoneEditSave(); }
+      else if (e.key === 'Escape') { e.preventDefault(); anyoneEditCancel(); }
     });
   });
   const anyCopyFpr = document.getElementById('btn-any-copy-fpr');
